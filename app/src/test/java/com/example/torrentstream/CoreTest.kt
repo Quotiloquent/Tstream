@@ -30,7 +30,10 @@ class CoreTest {
     @Test fun pathTraversalIsRejected() {
         val root = Files.createTempDirectory("t").toFile()
         PieceMath.safeResolve(root, "dir/movie.mkv")
-        for (bad in listOf("../../etc/passwd", "a/../../b", "/etc/passwd")) {
+        // A leading slash is re-rooted under the cache dir by java.io.File, so it is contained.
+        val abs = PieceMath.safeResolve(root, "/etc/passwd")
+        assertTrue(abs.path.startsWith(root.canonicalPath))
+        for (bad in listOf("../../etc/passwd", "a/../../b", "..")) {
             try {
                 PieceMath.safeResolve(root, bad)
                 fail("accepted $bad")
