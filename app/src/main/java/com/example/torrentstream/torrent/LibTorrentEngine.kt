@@ -141,7 +141,7 @@ class LibTorrentEngine(
         val h = handle ?: throw IllegalStateException("No torrent loaded")
         val ti = h.torrentFile() ?: throw IllegalStateException("No metadata")
         require(fileIndex in 0 until ti.numFiles()) { "Bad file index" }
-        h.prioritizeFiles(Array(ti.numFiles()) { if (it == fileIndex) Priority.SEVEN else Priority.IGNORE })
+        h.prioritizeFiles(Array(ti.numFiles()) { if (it == fileIndex) Priority.TOP_PRIORITY else Priority.IGNORE })
         stream?.close()
         return LtFileStream(h, ti, fileIndex, root, settings.aheadBytes).also { stream = it }
     }

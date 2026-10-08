@@ -34,7 +34,7 @@ class CoreTest {
             try {
                 PieceMath.safeResolve(root, bad)
                 fail("accepted $bad")
-            } catch (_: IllegalArgumentException) {
+            } catch (e: IllegalArgumentException) {
             }
         }
     }
