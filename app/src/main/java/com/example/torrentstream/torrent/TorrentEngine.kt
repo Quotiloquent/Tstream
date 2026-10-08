@@ -35,11 +35,15 @@ interface FileStream {
 interface TorrentEngine {
     val stats: StateFlow<TorrentStats>
 
+    /** True while a torrent is loaded in the session (false after [closeTorrent]). */
+    val isOpen: Boolean
+
     /** [source] is a magnet URI or an absolute path to a .torrent file. Suspends until metadata is known. */
     suspend fun open(source: String): TorrentMeta
 
     /** Select a file for streaming: all other files are set to "do not download". */
     fun openFile(fileIndex: Int): FileStream
 
+    /** Stops the torrent and deletes everything it downloaded. Safe to call repeatedly. */
     fun closeTorrent()
 }

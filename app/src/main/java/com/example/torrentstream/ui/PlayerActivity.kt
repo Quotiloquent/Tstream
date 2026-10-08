@@ -24,6 +24,7 @@ import androidx.media3.ui.PlayerView
 import com.example.torrentstream.App
 import com.example.torrentstream.streaming.TorrentDataSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -33,6 +34,8 @@ import kotlinx.coroutines.withContext
 class PlayerActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var error: String? = null
+    private var job: Job? = null
+    private var engineClosed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,7 +53,7 @@ class PlayerActivity : AppCompatActivity() {
         })
 
         val index = intent.getIntExtra("index", -1)
-        lifecycleScope.launch {
+        job = lifecycleScope.launch {
             val stream = try {
                 withContext(Dispatchers.IO) { app.engine.openFile(index) }
             } catch (e: Exception) {
@@ -104,9 +107,27 @@ class PlayerActivity : AppCompatActivity() {
         player?.pause()
     }
 
+    /**
+     * Leaving the player (back button) stops the stream and deletes the downloaded data right away.
+     * Done in onPause: MainActivity resumes before onDestroy runs, and it needs to see the torrent closed.
+     */
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing) stopPlayback()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        stopPlayback()
+    }
+
+    private fun stopPlayback() {
+        job?.cancel()
         player?.release()
         player = null
+        if (!engineClosed) {
+            engineClosed = true
+            (application as App).engine.closeTorrent()
+        }
     }
 }

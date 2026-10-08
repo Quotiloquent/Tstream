@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.libtorrent4j.AlertListener
 import org.libtorrent4j.Priority
+import org.libtorrent4j.SessionHandle
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SettingsPack
 import org.libtorrent4j.TorrentFlags
@@ -51,6 +52,7 @@ class LibTorrentEngine(
     )
     private val _stats = MutableStateFlow(TorrentStats())
     override val stats: StateFlow<TorrentStats> = _stats.asStateFlow()
+    override val isOpen: Boolean get() = handle != null
 
     @Volatile private var started = false
     @Volatile private var handle: TorrentHandle? = null
@@ -99,6 +101,7 @@ class LibTorrentEngine(
     @Synchronized
     private fun start() {
         if (started) return
+        root.deleteRecursively() // leftovers from a previous run that was killed before it could clean up
         sm.addListener(listener)
         sm.start() // default pack: DHT bootstrap nodes, LSD, uTP, etc.
         val sp = SettingsPack()
@@ -176,7 +179,7 @@ class LibTorrentEngine(
         _stats.value = TorrentStats()
         val removed: CompletableDeferred<Unit>? =
             if (h != null && h.isValid) CompletableDeferred<Unit>().also { removal = it } else null
-        if (removed != null) sm.remove(h!!)
+        if (removed != null) sm.remove(h!!, SessionHandle.DELETE_FILES)
         val previous = cleanup
         // Removal is asynchronous and libtorrent memory-maps the files: only delete them (and let a
         // same-hash torrent be added again) once the session confirms the torrent is gone.

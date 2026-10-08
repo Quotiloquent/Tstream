@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var list: ListView
     private var files: List<TorrentFileMeta> = emptyList()
     private var job: Job? = null
+    private var lastSource: String? = null
 
     private val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) load(null, uri)
@@ -110,6 +111,7 @@ class MainActivity : AppCompatActivity() {
                     contentResolver.openInputStream(torrentUri)!!.use { i -> out.outputStream().use { i.copyTo(it) } }
                     out.absolutePath
                 } else magnet!!
+                lastSource = source
                 val meta = engine.open(source)
                 files = meta.files
                 list.adapter = ArrayAdapter(
@@ -122,6 +124,16 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 status.text = "Error: ${e.message ?: e.javaClass.simpleName}"
             }
+        }
+    }
+
+    /** The player wipes the cache when you leave it; bring the file list back (metadata only, no data). */
+    override fun onResume() {
+        super.onResume()
+        val src = lastSource
+        if (src != null && files.isNotEmpty() && !engine.isOpen && job?.isActive != true) {
+            load(src, null)
+            status.text = "Cache cleared. Reloading torrent..."
         }
     }
 
