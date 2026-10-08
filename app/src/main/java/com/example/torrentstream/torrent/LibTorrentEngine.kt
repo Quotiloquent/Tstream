@@ -2,6 +2,8 @@ package com.example.torrentstream.torrent
 
 import com.example.torrentstream.AppSettings
 import kotlinx.coroutines.CompletableDeferred
+import android.util.Log
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -43,7 +45,10 @@ class LibTorrentEngine(
 ) : TorrentEngine {
 
     private val sm = SessionManager()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            CoroutineExceptionHandler { _, e -> Log.e("TorrentEngine", "background job failed", e) }
+    )
     private val _stats = MutableStateFlow(TorrentStats())
     override val stats: StateFlow<TorrentStats> = _stats.asStateFlow()
 
@@ -52,21 +57,34 @@ class LibTorrentEngine(
     @Volatile private var pending: CompletableDeferred<TorrentHandle>? = null
     @Volatile private var stream: LtFileStream? = null
     @Volatile private var cleanup: Job? = null
+    @Volatile private var removal: CompletableDeferred<Unit>? = null
 
     private val listener = object : AlertListener {
         override fun types(): IntArray? = null // all alerts
         override fun alert(alert: Alert<*>) {
             when (alert.type()) {
                 AlertType.ADD_TORRENT -> {
-                    val h = (alert as AddTorrentAlert).handle()
-                    if (h.isValid && h.torrentFile() != null) ready(h) // .torrent files: metadata already known
+                    val h = owned((alert as AddTorrentAlert).handle())
+                    if (h != null) {
+                        handle = h // always track it, even before metadata, so close/retry can remove it
+                        if (h.torrentFile() != null) ready(h) // .torrent files: metadata already known
+                    }
                 }
-                AlertType.METADATA_RECEIVED -> ready((alert as MetadataReceivedAlert).handle())
+                AlertType.TORRENT_REMOVED -> removal?.complete(Unit)
+                AlertType.METADATA_RECEIVED -> owned((alert as MetadataReceivedAlert).handle())?.let { ready(it) }
                 AlertType.PIECE_FINISHED -> stream?.signal()
                 else -> Unit
             }
         }
     }
+
+    /**
+     * A handle taken from an alert points into the alert's own memory, which libtorrent frees as soon
+     * as the callback returns. Using it later segfaults. Looking the torrent up in the session gives
+     * a handle we own. Must be called inside the alert callback, while the alert is still alive.
+     */
+    private fun owned(fromAlert: TorrentHandle): TorrentHandle? =
+        if (fromAlert.isValid) sm.find(fromAlert.infoHash()) else null
 
     private fun ready(h: TorrentHandle) {
         val p = pending ?: return
@@ -91,13 +109,17 @@ class LibTorrentEngine(
         scope.launch {
             while (isActive) {
                 delay(1000) // UI stats at 1 Hz
-                val h = handle
-                if (h != null && h.isValid) {
-                    val s = h.status()
-                    _stats.value = TorrentStats(
-                        s.downloadPayloadRate(), s.uploadPayloadRate(),
-                        s.numPeers(), s.numSeeds(), s.progress(),
-                    )
+                try {
+                    val h = handle
+                    if (h != null && h.isValid) {
+                        val s = h.status()
+                        _stats.value = TorrentStats(
+                            s.downloadPayloadRate(), s.uploadPayloadRate(),
+                            s.numPeers(), s.numSeeds(), s.progress(),
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w("TorrentEngine", "stats failed", e)
                 }
             }
         }
@@ -149,10 +171,23 @@ class LibTorrentEngine(
     override fun closeTorrent() {
         stream?.close(); stream = null
         pending?.cancel(); pending = null
-        handle?.let { if (it.isValid) sm.remove(it) }
+        val h = handle
         handle = null
         _stats.value = TorrentStats()
-        cleanup = scope.launch { root.deleteRecursively() } // minimal "cache" policy: wiped per torrent
+        val removed: CompletableDeferred<Unit>? =
+            if (h != null && h.isValid) CompletableDeferred<Unit>().also { removal = it } else null
+        if (removed != null) sm.remove(h!!)
+        val previous = cleanup
+        // Removal is asynchronous and libtorrent memory-maps the files: only delete them (and let a
+        // same-hash torrent be added again) once the session confirms the torrent is gone.
+        cleanup = scope.launch {
+            previous?.join()
+            if (removed != null) {
+                withTimeoutOrNull(5000) { removed.await() }
+                delay(300)
+            }
+            root.deleteRecursively()
+        }
     }
 }
 
@@ -204,7 +239,14 @@ internal class LtFileStream(
 
     fun signal() = lock.withLock { cond.signalAll() }
 
-    override fun awaitAvailable(position: Long, length: Int): Int {
+    override fun awaitAvailable(position: Long, length: Int): Int =
+        try {
+            doAwait(position, length)
+        } catch (e: RuntimeException) {
+            throw IOException("Torrent engine error: ${e.message}", e)
+        }
+
+    private fun doAwait(position: Long, length: Int): Int {
         val global = base + position
         val first = PieceMath.pieceOf(global, pieceLen)
         refresh(first)

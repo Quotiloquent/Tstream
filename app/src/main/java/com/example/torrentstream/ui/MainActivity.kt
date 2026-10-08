@@ -1,7 +1,9 @@
 package com.example.torrentstream.ui
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -26,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private val engine get() = (application as App).engine
     private lateinit var input: EditText
     private lateinit var status: TextView
+    private lateinit var diag: TextView
     private lateinit var list: ListView
     private var files: List<TorrentFileMeta> = emptyList()
     private var job: Job? = null
@@ -46,6 +49,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { picker.launch(arrayOf("*/*")) }
         }
         status = TextView(this).apply { setPadding(0, 16, 0, 16) }
+        diag = TextView(this).apply { textSize = 11f }
         list = ListView(this)
         list.setOnItemClickListener { _, _, pos, _ ->
             val f = files[pos]
@@ -58,10 +62,29 @@ class MainActivity : AppCompatActivity() {
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 48, 32, 32)
-            addView(input); addView(magnetBtn); addView(fileBtn); addView(status)
+            addView(input); addView(magnetBtn); addView(fileBtn); addView(diag); addView(status)
             addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         })
-        handleIntent(intent)
+        showDiagnostics()
+        // Only act on the launch intent once; recreation (rotation etc.) must not re-open the torrent.
+        if (savedInstanceState == null) handleIntent(intent)
+    }
+
+    private fun showDiagnostics() {
+        val sb = StringBuilder()
+        val crash = File(filesDir, "crash.txt")
+        if (crash.exists()) {
+            sb.append("Last crash:\n").append(crash.readText().take(1200)).append('\n')
+            crash.delete()
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            val am = getSystemService(ActivityManager::class.java)
+            am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()?.let {
+                // 4 = Java crash, 5 = native crash, 3 = ANR, 10 = low memory killed by user/system (see ApplicationExitInfo)
+                sb.append("Last exit: reason=${it.reason} ${it.description ?: ""}")
+            }
+        }
+        diag.text = sb.toString()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -71,6 +94,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleIntent(i: Intent) {
         val d = i.data ?: return
+        setIntent(Intent(i).apply { data = null }) // consume it
         if (d.scheme == "magnet") load(d.toString(), null) else load(null, d)
     }
 
