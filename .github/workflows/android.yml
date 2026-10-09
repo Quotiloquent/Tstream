@@ -21,6 +21,9 @@ jobs:
         with:
           gradle-version: 8.9
 
+      - name: Install NDK + CMake (native hole-punch helper)
+        run: printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.1.10909125" "cmake;3.22.1"
+
       - name: Unit tests + debug APK
         run: gradle testDebugUnitTest assembleDebug --no-daemon --console=plain
 

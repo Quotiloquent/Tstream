@@ -1,4 +1,4 @@
-package com.example.torrentstream.streaming
+package com.noapmat.tsream.streaming
 
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -8,7 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
-import com.example.torrentstream.torrent.FileStream
+import com.noapmat.tsream.torrent.FileStream
 import java.io.EOFException
 import java.io.RandomAccessFile
 

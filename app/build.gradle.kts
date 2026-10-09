@@ -4,11 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.example.torrentstream"
+    namespace = "com.noapmat.tsream"
     compileSdk = 34
+    ndkVersion = "26.1.10909125"
 
     defaultConfig {
-        applicationId = "com.example.torrentstream"
+        applicationId = "com.noapmat.tsream"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -20,6 +21,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    buildFeatures { viewBinding = true }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 val lt = "2.1.0-35"
@@ -36,6 +44,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-ui:$media3")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 

@@ -1,15 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- Only needed when the user picks a cache folder outside the app's own storage.
+         libtorrent writes with plain file paths, which Android 11+ allows only with "All files access". -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
     <application
         android:name=".App"
         android:allowBackup="false"
-        android:label="TorrentStream"
-        android:theme="@style/Theme.App">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:requestLegacyExternalStorage="true"
+        android:theme="@style/Theme.Tstream">
 
         <activity
             android:name=".ui.MainActivity"
@@ -36,9 +52,11 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".ui.SettingsActivity" android:exported="false" />
+
         <activity
             android:name=".ui.PlayerActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode" />
     </application>
 </manifest>

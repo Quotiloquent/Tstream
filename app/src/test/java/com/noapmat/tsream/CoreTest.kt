@@ -1,8 +1,8 @@
-package com.example.torrentstream
+package com.noapmat.tsream
 
-import com.example.torrentstream.torrent.Magnet
-import com.example.torrentstream.torrent.MediaTypes
-import com.example.torrentstream.torrent.PieceMath
+import com.noapmat.tsream.torrent.Magnet
+import com.noapmat.tsream.torrent.MediaTypes
+import com.noapmat.tsream.torrent.PieceMath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

@@ -1,4 +1,4 @@
-package com.example.torrentstream.torrent
+package com.noapmat.tsream.torrent
 
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
