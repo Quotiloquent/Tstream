@@ -23,10 +23,11 @@ data class AppSettings(
     val behindBytes: Long get() = behindMb.toLong() shl 20
 
     /**
-     * Deleting data behind the playhead only makes sense when we are not seeding: libtorrent would
-     * otherwise keep advertising (and serving) pieces whose bytes we have already deleted.
+     * Seeding and smart cache are mutually exclusive: smart cache deletes data behind the playhead, and
+     * libtorrent would keep advertising (and serving) pieces whose bytes are gone. So seeding only
+     * counts when smart cache is off, whatever the stored switch says.
      */
-    val evictEnabled: Boolean get() = smartCache && !seedWhileWatching
+    val seeding: Boolean get() = seedWhileWatching && !smartCache
 
     /** RAM cap for the player's own buffer (it would otherwise grow to ~100+ MB). */
     val playerRamBytes: Int get() = aheadMb.coerceIn(16, 128) shl 20

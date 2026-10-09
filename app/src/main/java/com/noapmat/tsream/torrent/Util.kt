@@ -81,6 +81,10 @@ object StoragePaths {
 }
 
 object Fmt {
+    /** Transfer rate in bytes/second, e.g. "8.2 MB/s" or "120 KB/s". */
+    fun rate(bps: Int): String =
+        if (bps >= 1 shl 20) "%.1f MB/s".format(bps / 1048576.0) else "%d KB/s".format(bps shr 10)
+
     fun size(b: Long): String = when {
         b >= 1L shl 30 -> "%.2f GB".format(b / (1L shl 30).toDouble())
         b >= 1L shl 20 -> "%.1f MB".format(b / (1L shl 20).toDouble())

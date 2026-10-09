@@ -25,6 +25,7 @@ import androidx.media3.ui.PlayerView
 import com.noapmat.tsream.App
 import com.noapmat.tsream.databinding.ActivityPlayerBinding
 import com.noapmat.tsream.streaming.TorrentDataSource
+import com.noapmat.tsream.torrent.Fmt
 import com.noapmat.tsream.torrent.OrientationPicker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,6 +59,7 @@ class PlayerActivity : AppCompatActivity() {
 
         val app = application as App
         val s = app.settings
+        val seeding = s.seeding
         val index = intent.getIntExtra("index", -1)
 
         job = lifecycleScope.launch {
@@ -106,7 +108,8 @@ class PlayerActivity : AppCompatActivity() {
                         if (st.peers == 0) appendLine("No peers available yet.")
                     }
                     append("Buffer ${p.totalBufferedDuration / 1000}s  ")
-                    append("\u2193 %.1f MB/s  ".format(st.downBps / 1048576.0))
+                    append("\u2193 ${Fmt.rate(st.downBps)}  ")
+                    if (seeding) append("\u2191 ${Fmt.rate(st.upBps)}  ") // upload only shown while seeding is on
                     append("Peers ${st.peers} (seeds ${st.seeds})")
                 }
                 delay(1000)

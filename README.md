@@ -10,7 +10,7 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
   (container headers/index). Seeking back past deleted data triggers a recheck and re-download.
 - Smart cache off: the whole file is cached straight into the cache folder.
 - Cache folder picker (system folder picker, Android 10+). Only the `Tstream-cache` sub-folder is ever written/deleted.
-- Seed while watching (off by default). Seeding stops and the cache is deleted when you leave the player.
+- Seed while watching (off by default, only available with smart cache off). Shows upload speed in the player. Seeding stops and the cache is deleted when you leave the player.
 - Player orientation follows the video: landscape or portrait, whichever shows the picture larger.
 - Google Sans (OFL) bundled; Material You colours on Android 12+.
 

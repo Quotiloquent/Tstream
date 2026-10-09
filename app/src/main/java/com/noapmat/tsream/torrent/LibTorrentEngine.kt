@@ -3,6 +3,7 @@ package com.noapmat.tsream.torrent
 import com.noapmat.tsream.AppSettings
 import kotlinx.coroutines.CompletableDeferred
 import android.util.Log
+import com.noapmat.tsream.cache.Cleanup
 import com.noapmat.tsream.cache.HolePuncher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -114,7 +115,7 @@ class LibTorrentEngine(
     @Synchronized
     private fun start() {
         if (started) return
-        root.deleteRecursively() // leftovers from a previous run that was killed before it could clean up
+        Cleanup.deleteTree(root) // leftovers from a previous run that was killed before it could clean up
         sm.addListener(listener)
         sm.start() // default pack: DHT bootstrap nodes, LSD, uTP, etc.
         scope.launch {
@@ -145,8 +146,13 @@ class LibTorrentEngine(
         sp.downloadRateLimit(s.downloadLimitBps)
         sp.uploadRateLimit(s.uploadLimitBps)
         // Not seeding: nobody is ever unchoked and no "allowed fast" pieces are offered, so we upload nothing.
-        sp.setInteger(settings_pack.int_types.unchoke_slots_limit.swigValue(), if (s.seedWhileWatching) 8 else 0)
-        sp.setInteger(settings_pack.int_types.allowed_fast_set_size.swigValue(), if (s.seedWhileWatching) 5 else 0)
+        // (Never use an upload *rate limit* for this: libtorrent charges request messages and TCP ACKs to it,
+        // so a tiny limit starves the download too.)
+        sp.setInteger(settings_pack.int_types.unchoke_slots_limit.swigValue(), if (s.seeding) 8 else 0)
+        sp.setInteger(settings_pack.int_types.allowed_fast_set_size.swigValue(), if (s.seeding) 5 else 0)
+        // When every wanted piece in the window is downloaded libtorrent considers us "finished" and would drop
+        // its connections to seeds; reconnecting then costs up to a minute of buffering when the window slides.
+        sp.setBoolean(settings_pack.bool_types.close_redundant_connections.swigValue(), false)
         sm.applySettings(sp)
     }
 
@@ -192,10 +198,9 @@ class LibTorrentEngine(
         h.prioritizeFiles(Array(ti.numFiles()) { if (it == fileIndex) Priority.TOP_PRIORITY else Priority.IGNORE })
         stream?.close()
         val s = settings
-        if (!s.seedWhileWatching) h.setUploadLimit(1) // belt and braces on top of the unchoke-slots switch
         return LtFileStream(
             h, ti, fileIndex, root, s.aheadBytes, s.behindBytes,
-            smart = s.smartCache, evict = s.evictEnabled,
+            smart = s.smartCache, evict = s.smartCache,
         ).also { stream = it }
     }
 
@@ -218,7 +223,10 @@ class LibTorrentEngine(
                 withTimeoutOrNull(5000) { removed.await() }
                 delay(300)
             }
-            dir.deleteRecursively()
+            // Slow / busy storage (SD cards) may refuse the first attempts while libtorrent still has files open.
+            var attempts = 0
+            while (!Cleanup.deleteTree(dir) && attempts++ < 8) delay(500)
+            if (dir.exists()) Log.w("TorrentEngine", "could not fully delete ${dir.path}; it is wiped on next start")
         }
     }
 }
@@ -278,7 +286,7 @@ internal class LtFileStream(
     private var checkDeadline = 0L
 
     init {
-        initPriorities()
+        initPriorities(firstPiece)
         refresh(firstPiece)
     }
 
@@ -286,16 +294,24 @@ internal class LtFileStream(
 
     /** Nothing downloads except what we explicitly enable. libtorrent forgets these after a recheck. */
     @Synchronized
-    private fun initPriorities() {
-        if (!smart) { winLo = -1; winHi = -2; lastFirst = -1; return }
-        handle.prioritizePieces(Array(numPieces) { Priority.IGNORE })
-        for (p in firstPiece..minOf(firstPiece + 1, lastPiece)) handle.piecePriority(p, Priority.DEFAULT)
-        for (p in maxOf(lastPiece - 1, firstPiece)..lastPiece) handle.piecePriority(p, Priority.DEFAULT)
+    private fun initPriorities(first: Int) {
         winLo = -1; winHi = -2; lastFirst = -1
+        if (!smart) return
+        val lo = first
+        val hi = minOf(lastPiece, first + ahead)
+        // One atomic call. Setting everything to "ignore" first would make libtorrent think the torrent is
+        // finished for a moment (it then drops connections to seeds).
+        handle.prioritizePieces(Array(numPieces) { p ->
+            val inFile = p in firstPiece..lastPiece
+            if (p in lo..hi || (inFile && CachePolicy.isProtected(p, firstPiece, lastPiece))) Priority.DEFAULT else Priority.IGNORE
+        })
+        winLo = lo; winHi = hi
     }
 
     /** Enable downloading for [lo, hi] only; pieces that left the window go back to "ignore". */
     private fun setWindow(lo: Int, hi: Int) {
+        // enter first, leave second: there is always something wanted, so the torrent never looks finished
+        for (p in lo..hi) if (p < winLo || p > winHi) handle.piecePriority(p, Priority.DEFAULT)
         if (winHi >= winLo) {
             for (p in winLo..winHi) {
                 if ((p < lo || p > hi) && !CachePolicy.isProtected(p, firstPiece, lastPiece)) {
@@ -303,7 +319,6 @@ internal class LtFileStream(
                 }
             }
         }
-        for (p in lo..hi) if (p < winLo || p > winHi) handle.piecePriority(p, Priority.DEFAULT)
         winLo = lo; winHi = hi
     }
 
@@ -399,7 +414,7 @@ internal class LtFileStream(
     @Synchronized
     private fun reinit(first: Int) {
         needsReinit = false
-        initPriorities()
+        initPriorities(first)
         val keep = CachePolicy.keepRange(first, behind, ahead, firstPiece, lastPiece)
         for (p in keep) if (handle.havePiece(p)) present.set(p) // survivors of the recheck
         refresh(first)

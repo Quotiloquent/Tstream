@@ -199,7 +199,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Share the cached pieces with other peers while you watch. Seeding stops and the cache is deleted when you leave the player."
+                        android:text="Upload the pieces you have downloaded to other peers while you watch (shows the upload speed in the player). Seeding stops and the cache is deleted when you leave the player. Needs smart cache to be off."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -208,7 +208,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:text="With smart cache on, data behind the playhead is kept while seeding, so disk use grows until you leave the player (the download-ahead limit still applies)."
+                        android:text="Unavailable while smart cache is on: smart cache deletes data you have already watched, so there is nothing complete to share."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorTertiary"
                         android:visibility="gone" />
