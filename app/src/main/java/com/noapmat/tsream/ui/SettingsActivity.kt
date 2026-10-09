@@ -18,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.noapmat.tsream.AppSettings
 import com.noapmat.tsream.cache.CacheProbe
 import com.noapmat.tsream.cache.Cleanup
+import com.noapmat.tsream.cache.PositionStore
 import com.noapmat.tsream.cache.TreeUriPaths
 import com.noapmat.tsream.databinding.ActivitySettingsBinding
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +77,13 @@ class SettingsActivity : AppCompatActivity() {
             AppSettings.update(this) { it.copy(seedWhileWatching = on) }
             refreshUi()
         }
+        b.switchRemember.setOnCheckedChangeListener { _, on ->
+            if (!binding) AppSettings.update(this) { it.copy(rememberPosition = on) }
+        }
+        b.btnClearPositions.setOnClickListener {
+            PositionStore.clearAll(this)
+            toast("Saved positions cleared")
+        }
         b.btnChooseFolder.setOnClickListener { treePicker.launch(null) }
         b.btnResetFolder.setOnClickListener {
             val old = AppSettings.load(this).cacheDir
@@ -106,6 +114,7 @@ class SettingsActivity : AppCompatActivity() {
         b.switchSmart.isChecked = s.smartCache
         b.switchSeed.isChecked = s.seeding          // always off while smart cache is on
         b.switchSeed.isEnabled = !s.smartCache
+        b.switchRemember.isChecked = s.rememberPosition
         binding = false
         b.aheadLayout.isEnabled = s.smartCache
         b.behindLayout.isEnabled = s.smartCache

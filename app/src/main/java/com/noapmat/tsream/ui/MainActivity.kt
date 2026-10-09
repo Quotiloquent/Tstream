@@ -28,6 +28,8 @@ class MainActivity : AppCompatActivity() {
     private val adapter = FileAdapter { f ->
         if (f.playable) {
             startActivity(Intent(this, PlayerActivity::class.java).putExtra("index", f.index))
+        } else if (f.subtitle) {
+            Toast.makeText(this, "Subtitles are picked inside the player (CC button)", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(this, "Not a recognised video file", Toast.LENGTH_SHORT).show()
         }
@@ -115,7 +117,7 @@ class MainActivity : AppCompatActivity() {
                 } else magnet!!
                 lastSource = source
                 val meta = engine.open(source)
-                adapter.submit(meta.files.sortedByDescending { it.playable }) // videos first
+                adapter.submit(meta.files.sortedByDescending { it.playable }) // videos first, then subtitles/other
                 loaded = meta.files.isNotEmpty()
                 b.status.text = meta.name
             } catch (e: CancellationException) {

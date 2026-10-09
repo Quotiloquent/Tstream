@@ -31,8 +31,14 @@ class FileAdapter(private val onClick: (TorrentFileMeta) -> Unit) : RecyclerView
         val dir = f.path.substringBeforeLast('/', "")
         h.b.name.text = f.path.substringAfterLast('/')
         h.b.meta.text = if (dir.isEmpty()) Fmt.size(f.size) else Fmt.size(f.size) + "  \u00B7  " + dir
-        h.b.icon.setImageResource(if (f.playable) R.drawable.ic_play else R.drawable.ic_file)
-        h.b.root.alpha = if (f.playable) 1f else 0.55f
+        h.b.icon.setImageResource(
+            when {
+                f.playable -> R.drawable.ic_play
+                f.subtitle -> R.drawable.ic_subtitles
+                else -> R.drawable.ic_file
+            }
+        )
+        h.b.root.alpha = if (f.playable) 1f else if (f.subtitle) 0.8f else 0.55f
         h.b.root.setOnClickListener { onClick(f) }
     }
 }

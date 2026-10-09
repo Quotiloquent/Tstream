@@ -29,7 +29,9 @@ object PieceMath {
 
 object MediaTypes {
     private val ext = setOf("mp4", "mkv", "webm", "avi", "mov", "m4v", "ts", "m2ts")
+    private val subs = setOf("srt", "ass", "ssa", "vtt")
     fun looksPlayable(path: String) = path.substringAfterLast('.', "").lowercase() in ext
+    fun isSubtitle(path: String) = path.substringAfterLast('.', "").lowercase() in subs
 }
 
 /** Piece-window rules of the smart cache, kept free of Android/libtorrent so they can be unit-tested. */
@@ -37,12 +39,19 @@ object CachePolicy {
     /** First and last two pieces of a file hold container headers / indexes (mp4 moov, mkv cues): never evict. */
     fun isProtected(p: Int, firstPiece: Int, lastPiece: Int) = p <= firstPiece + 1 || p >= lastPiece - 1
 
-    /** Pieces worth keeping on disk around the read position [first]. */
-    fun keepRange(first: Int, behind: Int, ahead: Int, firstPiece: Int, lastPiece: Int): IntRange =
-        maxOf(firstPiece, first - behind)..minOf(lastPiece, first + ahead)
+    /**
+     * Pieces worth keeping: [behind] pieces before the [anchor] (the estimated *playhead*, which trails the
+     * loader's read position [first] by whatever the player has buffered) up to [ahead] pieces after [first].
+     */
+    fun keepRange(anchor: Int, behind: Int, first: Int, ahead: Int, firstPiece: Int, lastPiece: Int): IntRange =
+        maxOf(firstPiece, anchor - behind)..minOf(lastPiece, first + ahead)
 
-    fun shouldEvict(p: Int, first: Int, behind: Int, ahead: Int, firstPiece: Int, lastPiece: Int) =
-        p !in keepRange(first, behind, ahead, firstPiece, lastPiece) && !isProtected(p, firstPiece, lastPiece)
+    /**
+     * Delete only what is clearly behind the playhead, or a whole extra window beyond the read position
+     * (leftovers after a long seek back). Short rewinds never touch data that is still ahead of you.
+     */
+    fun shouldEvict(p: Int, anchor: Int, first: Int, behind: Int, ahead: Int, firstPiece: Int, lastPiece: Int) =
+        !isProtected(p, firstPiece, lastPiece) && (p < anchor - behind || p > first + 2 * ahead)
 
     fun piecesFor(bytes: Long, pieceLength: Int, min: Int) = (bytes / pieceLength).toInt().coerceAtLeast(min)
 }

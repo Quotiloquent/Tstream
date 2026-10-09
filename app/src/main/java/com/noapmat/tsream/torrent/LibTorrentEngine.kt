@@ -48,6 +48,8 @@ import kotlin.concurrent.withLock
 class LibTorrentEngine(
     private val rootProvider: () -> File,
     private val settingsProvider: () -> AppSettings,
+    /** Completes when the start-up cleanup of stale caches is done; nothing is opened before that. */
+    private val startupGate: suspend () -> Unit = {},
 ) : TorrentEngine {
 
     /** Dedicated folder (always a "Tstream-cache" / app-private folder) re-read from settings on every open(). */
@@ -63,6 +65,8 @@ class LibTorrentEngine(
     private val _stats = MutableStateFlow(TorrentStats())
     override val stats: StateFlow<TorrentStats> = _stats.asStateFlow()
     override val isOpen: Boolean get() = handle != null
+    @Volatile private var metaFiles: List<TorrentFileMeta> = emptyList()
+    override val files: List<TorrentFileMeta> get() = metaFiles
 
     @Volatile private var started = false
     @Volatile private var handle: TorrentHandle? = null
@@ -106,10 +110,29 @@ class LibTorrentEngine(
         val p = pending ?: return
         if (p.isCompleted) return
         val ti = h.torrentFile() ?: return
-        // Nothing downloads until the user picks a file.
-        h.prioritizeFiles(Array(ti.numFiles()) { Priority.IGNORE })
+        warmUp(h, ti)
         handle = h
         p.complete(h)
+    }
+
+    /**
+     * Nothing downloads until the user picks a file, except the first/last two pieces of the biggest video.
+     * That keeps peers interested (so they have already unchoked us) and the container index is on disk,
+     * so playback starts right away when that file is picked.
+     */
+    private fun warmUp(h: TorrentHandle, ti: TorrentInfo) {
+        h.prioritizeFiles(Array(ti.numFiles()) { Priority.IGNORE }) // survives a later recheck
+        val fs = ti.files()
+        val pl = ti.pieceLength()
+        val best = (0 until ti.numFiles())
+            .filter { MediaTypes.looksPlayable(fs.filePath(it)) }
+            .maxByOrNull { fs.fileSize(it) } ?: return
+        val first = PieceMath.pieceOf(fs.fileOffset(best), pl)
+        val last = PieceMath.pieceOf(fs.fileOffset(best) + maxOf(fs.fileSize(best), 1) - 1, pl)
+        val prios = Array(ti.numPieces()) { Priority.IGNORE }
+        for (p in first..minOf(first + 1, last)) prios[p] = Priority.DEFAULT
+        for (p in maxOf(last - 1, first)..last) prios[p] = Priority.DEFAULT
+        h.prioritizePieces(prios)
     }
 
     @Synchronized
@@ -157,6 +180,7 @@ class LibTorrentEngine(
     }
 
     override suspend fun open(source: String): TorrentMeta = withContext(Dispatchers.IO) {
+        startupGate()
         closeTorrent()
         cleanup?.join()
         root = rootProvider()
@@ -182,8 +206,13 @@ class LibTorrentEngine(
             val files = (0 until ti.numFiles()).mapNotNull { i ->
                 val path = fs.filePath(i)
                 if (path.contains("/.pad/")) null
-                else TorrentFileMeta(i, path, fs.fileSize(i), MediaTypes.looksPlayable(path))
+                else TorrentFileMeta(
+                    i, path, fs.fileSize(i),
+                    playable = MediaTypes.looksPlayable(path),
+                    subtitle = MediaTypes.isSubtitle(path),
+                )
             }
+            metaFiles = files
             TorrentMeta(ti.name(), files)
         } catch (t: Throwable) {
             closeTorrent()
@@ -204,9 +233,32 @@ class LibTorrentEngine(
         ).also { stream = it }
     }
 
+    override suspend fun fetchFile(fileIndex: Int): File = withContext(Dispatchers.IO) {
+        val h = handle ?: throw IllegalStateException("No torrent loaded")
+        val ti = h.torrentFile() ?: throw IllegalStateException("No metadata")
+        require(fileIndex in 0 until ti.numFiles()) { "Bad file index" }
+        val fs = ti.files()
+        val pl = ti.pieceLength()
+        val first = PieceMath.pieceOf(fs.fileOffset(fileIndex), pl)
+        val last = PieceMath.pieceOf(fs.fileOffset(fileIndex) + maxOf(fs.fileSize(fileIndex), 1) - 1, pl)
+        for (p in first..last) {
+            if (!h.havePiece(p)) {
+                h.piecePriority(p, Priority.TOP_PRIORITY)
+                h.setPieceDeadline(p, 200)
+            }
+        }
+        val deadline = System.currentTimeMillis() + 90_000
+        while ((first..last).any { !h.havePiece(it) }) {
+            if (System.currentTimeMillis() > deadline) throw IOException("Timed out downloading the file (no peers?)")
+            delay(150)
+        }
+        PieceMath.safeResolve(root, fs.filePath(fileIndex))
+    }
+
     override fun closeTorrent() {
         stream?.close(); stream = null
         pending?.cancel(); pending = null
+        metaFiles = emptyList()
         val h = handle
         handle = null
         _stats.value = TorrentStats()
@@ -234,7 +286,7 @@ class LibTorrentEngine(
 /**
  * Streams one file of the torrent with a bounded on-disk footprint:
  *  - only pieces in [read position, read position + ahead] are downloaded (everything else has priority 0),
- *  - finished pieces further than [behind] behind the read position are deleted from disk (hole punching),
+ *  - finished pieces further than [behind] behind the *playhead* are deleted from disk (hole punching),
  *  - the first/last two pieces (container headers/index) are always kept.
  * libtorrent still believes it "has" a deleted piece, so reading one again triggers a force-recheck, after
  * which libtorrent forgets the deleted pieces and downloads them again.
@@ -274,11 +326,14 @@ internal class LtFileStream(
     private val cond = lock.newCondition()
     @Volatile private var closed = false
 
+    /** How many pieces the playhead trails the loader's read position (the player's buffer). Unknown = never evict. */
+    @Volatile private var lagPieces = numPieces
+
     // Everything below is guarded by `this`.
     private var lastFirst = -1
     private var winLo = -1
     private var winHi = -2
-    private val present = BitSet(numPieces)  // pieces we know are complete on disk (and not deleted)
+    private val present = BitSet(numPieces)  // pieces known to be complete on disk (and not deleted)
     private val evicted = BitSet(numPieces)  // pieces deleted from disk that libtorrent still thinks it has
     private var punchBroken = false
     @Volatile private var checking = false
@@ -288,6 +343,16 @@ internal class LtFileStream(
     init {
         initPriorities(firstPiece)
         refresh(firstPiece)
+    }
+
+    // ---- availability: local bitmap first, native call only when unsure --------------------------
+
+    @Synchronized
+    private fun have(p: Int): Boolean {
+        if (present.get(p)) return true
+        if (evicted.get(p)) return false
+        if (handle.havePiece(p)) { present.set(p); return true }
+        return false
     }
 
     // ---- scheduling ----------------------------------------------------------------------------
@@ -326,16 +391,20 @@ internal class LtFileStream(
     @Synchronized
     private fun refresh(first: Int) {
         if (first == lastFirst) return
-        val jump = lastFirst < 0 || first < lastFirst || first > lastFirst + jumpGap
+        val jump = lastFirst < 0 || first < lastFirst - 2 || first > lastFirst + jumpGap
         lastFirst = first
         val hi = minOf(lastPiece, first + ahead)
         if (jump) handle.clearPieceDeadlines() // seek: stop chasing the old region
         if (smart) setWindow(first, hi)
-        for (p in first..minOf(hi, first + MAX_DEADLINE_PIECES - 1)) {
-            if (!handle.havePiece(p)) handle.setPieceDeadline(p, 300 + (p - first) * 250)
-        }
+        // Deadlines (ms): the piece being read, then the container index at the end of the file (mp4 moov /
+        // mkv cues - the player cannot start without it), then the rest of the window.
+        if (!have(first)) handle.setPieceDeadline(first, 100)
+        var d = 150
         for (p in maxOf(lastPiece - 1, firstPiece)..lastPiece) {
-            if (!handle.havePiece(p)) handle.setPieceDeadline(p, 3000) // mp4 moov / mkv cues
+            if (!have(p)) { handle.setPieceDeadline(p, d); d += 50 }
+        }
+        for (p in first + 1..minOf(hi, first + MAX_DEADLINE_PIECES - 1)) {
+            if (!have(p)) handle.setPieceDeadline(p, 300 + (p - first) * 250)
         }
         if (evictOn) evictBehind(first)
     }
@@ -344,10 +413,11 @@ internal class LtFileStream(
 
     private fun evictBehind(first: Int) {
         if (!evictOn || !HolePuncher.available || punchBroken) return
+        val anchor = maxOf(firstPiece, first - lagPieces) // estimated playhead
         var p = present.nextSetBit(0)
         while (p >= 0) {
             val next = present.nextSetBit(p + 1)
-            if (CachePolicy.shouldEvict(p, first, behind, ahead, firstPiece, lastPiece)) {
+            if (CachePolicy.shouldEvict(p, anchor, first, behind, ahead, firstPiece, lastPiece)) {
                 if (punch(p)) {
                     evicted.set(p)
                     present.clear(p)
@@ -369,6 +439,17 @@ internal class LtFileStream(
             return false
         }
         return true
+    }
+
+    /**
+     * The player's buffer makes the loader read far ahead of what you are watching. Playhead lag = buffered
+     * time converted to bytes with the file's average bitrate, padded by 50% (VBR) plus 2 MB.
+     */
+    override fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {
+        if (durationMs <= 0 || positionMs < 0) return
+        val lagMs = (bufferedMs - positionMs).coerceAtLeast(0)
+        val lagBytes = (lagMs.toDouble() / durationMs * size * 1.5).toLong() + (2L shl 20)
+        lagPieces = ((lagBytes + pieceLen - 1) / pieceLen).toInt().coerceIn(1, numPieces)
     }
 
     // ---- events from the alert thread ----------------------------------------------------------
@@ -415,8 +496,8 @@ internal class LtFileStream(
     private fun reinit(first: Int) {
         needsReinit = false
         initPriorities(first)
-        val keep = CachePolicy.keepRange(first, behind, ahead, firstPiece, lastPiece)
-        for (p in keep) if (handle.havePiece(p)) present.set(p) // survivors of the recheck
+        val lo = maxOf(firstPiece, first - lagPieces - behind)
+        for (p in lo..minOf(lastPiece, first + ahead)) if (handle.havePiece(p)) present.set(p) // survivors
         refresh(first)
     }
 
@@ -442,7 +523,7 @@ internal class LtFileStream(
                     reinit(first); continue
                 } else if (isEvicted(first)) {
                     startRecheck(); continue
-                } else if (handle.havePiece(first)) {
+                } else if (have(first)) {
                     break
                 }
                 lock.withLock { cond.await(500, TimeUnit.MILLISECONDS) } // woken by piece/check alerts
@@ -453,7 +534,7 @@ internal class LtFileStream(
         val wanted = global + length
         var end = (first + 1).toLong() * pieceLen
         var p = first + 1
-        while (end < wanted && p <= lastPiece && !isEvicted(p) && handle.havePiece(p)) { end += pieceLen; p++ }
+        while (end < wanted && p <= lastPiece && have(p)) { end += pieceLen; p++ }
         return minOf(length.toLong(), end - global).toInt()
     }
 

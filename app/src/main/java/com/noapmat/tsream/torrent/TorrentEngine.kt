@@ -4,7 +4,13 @@ import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import java.io.IOException
 
-data class TorrentFileMeta(val index: Int, val path: String, val size: Long, val playable: Boolean)
+data class TorrentFileMeta(
+    val index: Int,
+    val path: String,
+    val size: Long,
+    val playable: Boolean,
+    val subtitle: Boolean = false,
+)
 data class TorrentMeta(val name: String, val files: List<TorrentFileMeta>)
 data class TorrentStats(
     val downBps: Int = 0,
@@ -28,6 +34,9 @@ interface FileStream {
     @Throws(IOException::class)
     fun awaitAvailable(position: Long, length: Int): Int
 
+    /** Tells the stream where the playhead is so "keep behind" is measured from what you watch, not what is buffered. */
+    fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {}
+
     fun close()
 }
 
@@ -38,8 +47,14 @@ interface TorrentEngine {
     /** True while a torrent is loaded in the session (false after [closeTorrent]). */
     val isOpen: Boolean
 
+    /** Files of the loaded torrent (empty when nothing is loaded). */
+    val files: List<TorrentFileMeta>
+
     /** [source] is a magnet URI or an absolute path to a .torrent file. Suspends until metadata is known. */
     suspend fun open(source: String): TorrentMeta
+
+    /** Downloads one (small) file completely, e.g. a subtitle, and returns it. */
+    suspend fun fetchFile(fileIndex: Int): File
 
     /** Select a file for streaming: all other files are set to "do not download". */
     fun openFile(fileIndex: Int): FileStream

@@ -9,14 +9,15 @@ data class AppSettings(
     val aheadMb: Int = DEFAULT_AHEAD_MB,     // max data downloaded beyond the player's read position
     val behindMb: Int = DEFAULT_BEHIND_MB,   // data further than this behind the playhead is deleted
     val seedWhileWatching: Boolean = false,
+    val rememberPosition: Boolean = true,    // resume where you left off, per exact title
     val cacheDir: String = "",               // folder picked by the user, "" = app-private default
     val maxConnections: Int = 100,
     val downloadLimitBps: Int = 0,
     val uploadLimitBps: Int = 0,
     val minBufferMs: Int = 15_000,
     val maxBufferMs: Int = 60_000,
-    val startBufferMs: Int = 2_500,
-    val rebufferMs: Int = 5_000,
+    val startBufferMs: Int = 1_000,
+    val rebufferMs: Int = 2_500,
     val metadataTimeoutMs: Long = 90_000,
 ) {
     val aheadBytes: Long get() = aheadMb.toLong() shl 20
@@ -30,11 +31,11 @@ data class AppSettings(
     val seeding: Boolean get() = seedWhileWatching && !smartCache
 
     /** RAM cap for the player's own buffer (it would otherwise grow to ~100+ MB). */
-    val playerRamBytes: Int get() = aheadMb.coerceIn(16, 128) shl 20
+    val playerRamBytes: Int get() = (aheadMb * 3).coerceIn(48, 192) shl 20
 
     companion object {
-        const val DEFAULT_AHEAD_MB = 50
-        const val DEFAULT_BEHIND_MB = 30
+        const val DEFAULT_AHEAD_MB = 25
+        const val DEFAULT_BEHIND_MB = 15
         const val MIN_AHEAD_MB = 10
         const val MIN_BEHIND_MB = 4
         const val MAX_MB = 4096
@@ -43,11 +44,16 @@ data class AppSettings(
 
         fun load(ctx: Context): AppSettings {
             val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (p.getInt("version", 1) < 2) {
+                // v2 changed the defaults (25 / 15 MB): forget values saved by older builds so the new defaults apply
+                p.edit().remove("aheadMb").remove("behindMb").putInt("version", 2).apply()
+            }
             return AppSettings(
                 smartCache = p.getBoolean("smartCache", true),
                 aheadMb = p.getInt("aheadMb", DEFAULT_AHEAD_MB).coerceIn(MIN_AHEAD_MB, MAX_MB),
                 behindMb = p.getInt("behindMb", DEFAULT_BEHIND_MB).coerceIn(MIN_BEHIND_MB, MAX_MB),
                 seedWhileWatching = p.getBoolean("seed", false),
+                rememberPosition = p.getBoolean("rememberPosition", true),
                 cacheDir = p.getString("cacheDir", "") ?: "",
             )
         }
@@ -59,9 +65,21 @@ data class AppSettings(
                 .putInt("aheadMb", s.aheadMb.coerceIn(MIN_AHEAD_MB, MAX_MB))
                 .putInt("behindMb", s.behindMb.coerceIn(MIN_BEHIND_MB, MAX_MB))
                 .putBoolean("seed", s.seedWhileWatching)
+                .putBoolean("rememberPosition", s.rememberPosition)
+                .putInt("version", 2)
                 .putString("cacheDir", s.cacheDir)
                 .apply()
         }
+
+        /** Every cache folder we ever used, so leftovers can be wiped after a crash / swipe-away. */
+        fun rememberRoot(ctx: Context, root: File) {
+            val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val set = HashSet(p.getStringSet("knownRoots", emptySet()) ?: emptySet())
+            if (set.add(root.absolutePath)) p.edit().putStringSet("knownRoots", set).apply()
+        }
+
+        fun knownRoots(ctx: Context): Set<String> =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet("knownRoots", emptySet()) ?: emptySet()
 
         /** The default, app-private cache folder (needs no permissions). */
         fun defaultRoot(ctx: Context) = File(ctx.cacheDir, "torrents")

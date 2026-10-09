@@ -25,4 +25,100 @@
         android:paddingBottom="8dp"
         android:textColor="@android:color/white"
         android:textSize="12sp" />
+
+    <!-- subtitles / screenshot / lock -->
+    <LinearLayout
+        android:id="@+id/controlsRow"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:background="@drawable/bg_overlay"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/btnSubtitles"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Subtitles"
+            android:src="@drawable/ic_subtitles"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/btnScreenshot"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Screenshot"
+            android:src="@drawable/ic_camera"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/btnLock"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Lock controls"
+            android:src="@drawable/ic_lock"
+            app:tint="@android:color/white" />
+    </LinearLayout>
+
+    <!-- shown only while locked -->
+    <ImageButton
+        android:id="@+id/btnUnlock"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center_vertical|start"
+        android:layout_marginStart="24dp"
+        android:background="@drawable/bg_overlay"
+        android:contentDescription="Unlock"
+        android:src="@drawable/ic_lock"
+        android:visibility="gone"
+        app:tint="@android:color/white" />
+
+    <TextView
+        android:id="@+id/hud"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="48dp"
+        android:background="@drawable/bg_overlay"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/seekLeft"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical|start"
+        android:layout_marginStart="72dp"
+        android:background="@drawable/bg_overlay"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/seekRight"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical|end"
+        android:layout_marginEnd="72dp"
+        android:background="@drawable/bg_overlay"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
+        android:textColor="@android:color/white"
+        android:textSize="18sp"
+        android:visibility="gone" />
 </FrameLayout>
