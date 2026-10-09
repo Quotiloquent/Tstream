@@ -13,7 +13,7 @@ class CachePolicyTest {
 
     @Test fun keepRangeIsClampedToFile() {
         assertEquals(480..550, CachePolicy.keepRange(500, 20, 50, f, l))
-        assertEquals(10..60, CachePolicy.keepRange(12, 20, 50, f, l))
+        assertEquals(10..62, CachePolicy.keepRange(12, 20, 50, f, l))
         assertEquals(990..1009, CachePolicy.keepRange(1000, 10, 50, f, l))
     }
 
