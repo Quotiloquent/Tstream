@@ -187,7 +187,7 @@ class PlayerActivity : AppCompatActivity() {
 
             val media = Media(vlc, Uri.parse(srv.url))
             media.setHWDecoderEnabled(false, false) // hardware first, software when the chip can't do it
-            media.addOption(":network-caching=2500")
+            media.addOption(":network-caching=3000")
             val resume = if (rememberPosition && title.isNotBlank()) PositionStore.get(this@PlayerActivity, title) else null
             if (resume != null) {
                 media.addOption(":start-time=${resume / 1000}")
@@ -240,8 +240,7 @@ class PlayerActivity : AppCompatActivity() {
             "--freetype-outline-color=0",
             "--freetype-outline-opacity=255",
             "--freetype-shadow-opacity=128",
-            "--aout=android_audiotrack",
-            "--android-audiotrack-passthrough=0",
+            "--no-audio-time-stretch",
         )
         if (s.fastDecode) { opts += "--avcodec-skiploopfilter=4"; opts += "--avcodec-fast" }
         return try {
