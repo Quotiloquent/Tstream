@@ -5,6 +5,7 @@ import com.noapmat.tsream.torrent.MediaTypes
 import com.noapmat.tsream.torrent.PieceMath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -45,5 +46,15 @@ class CoreTest {
     @Test fun extensions() {
         assertTrue(MediaTypes.looksPlayable("a/b.MKV"))
         assertFalse(MediaTypes.looksPlayable("a/b.srt"))
+    }
+
+    @Test fun infoHashFromMagnet() {
+        val hex = "0123456789abcdef0123456789abcdef01234567"
+        assertEquals(hex, Magnet.infoHashHex("magnet:?xt=urn:btih:" + hex.uppercase() + "&dn=x"))
+        assertEquals(hex, Magnet.infoHashHex("magnet:?dn=x&xt=urn:btih:AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH"))
+        assertEquals("f".repeat(40), Magnet.infoHashHex("magnet:?xt=urn:btih:" + "7".repeat(32)))
+        assertEquals("0".repeat(38) + "ff", Magnet.infoHashHex("magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAH7"))
+        assertNull(Magnet.infoHashHex("magnet:?xt=urn:btih:xyz"))
+        assertNull(Magnet.infoHashHex("http://example.com"))
     }
 }

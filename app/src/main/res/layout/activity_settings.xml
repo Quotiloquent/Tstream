@@ -284,6 +284,81 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
+                            android:text="Hardware decoding"
+                            android:textAppearance="@style/TextAppearance.Tstream.Section"
+                            android:textColor="?attr/colorOnSurface" />
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchHw"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Use the phone's video chip when it supports the format. Turn it off if you see garbled or smeared pictures: everything is then decoded by the CPU, which is slower but exact."
+                        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="Audio output"
+                        android:textAppearance="@style/TextAppearance.Tstream.Section"
+                        android:textColor="?attr/colorOnSurface" />
+
+                    <com.google.android.material.button.MaterialButtonToggleGroup
+                        android:id="@+id/aoutGroup"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        app:selectionRequired="true"
+                        app:singleSelection="true">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAoutAuto"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Auto" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAoutTrack"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="AudioTrack" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAoutSles"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="OpenSL ES" />
+                    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="Change this only if the sound is crackly or dull on your phone."
+                        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                        android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
                             android:text="Fast software decoding"
                             android:textAppearance="@style/TextAppearance.Tstream.Section"
                             android:textColor="?attr/colorOnSurface" />
@@ -298,7 +373,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Some videos (for example 10-bit HEVC) can't be decoded by the phone's chip and are decoded by the CPU. This skips some filtering to keep up on slower phones, at slightly lower picture quality."
+                        android:text="Some videos (for example 10-bit HEVC) can't be decoded by the phone's chip and are decoded by the CPU. This skips some filtering to keep up on slower phones; fine detail can look slightly blockier."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>

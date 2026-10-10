@@ -9,6 +9,41 @@ object Magnet {
     )
 
     fun isValid(uri: String) = re.matches(uri.trim())
+
+    private val btih = Regex("xt=urn:btih:([0-9a-zA-Z]+)", RegexOption.IGNORE_CASE)
+
+    /** The v1 info hash of a magnet link as 40 lowercase hex characters (hex or base32 form), or null. */
+    fun infoHashHex(uri: String): String? {
+        val raw = btih.find(uri)?.groupValues?.get(1) ?: return null
+        return when (raw.length) {
+            40 -> raw.lowercase().takeIf { h -> h.all { it in '0'..'9' || it in 'a'..'f' } }
+            32 -> Base32.toHex(raw)
+            else -> null
+        }
+    }
+}
+
+object Base32 {
+    private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+    /** RFC 4648 base32 (no padding) to lowercase hex, or null for invalid characters. */
+    fun toHex(s: String): String? {
+        var buffer = 0
+        var bits = 0
+        val sb = StringBuilder()
+        for (c in s.uppercase()) {
+            val v = ALPHABET.indexOf(c)
+            if (v < 0) return null
+            buffer = (buffer shl 5) or v
+            bits += 5
+            if (bits >= 8) {
+                bits -= 8
+                sb.append("%02x".format((buffer shr bits) and 0xFF))
+                buffer = buffer and ((1 shl bits) - 1)
+            }
+        }
+        return sb.toString()
+    }
 }
 
 object PieceMath {

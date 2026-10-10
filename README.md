@@ -12,7 +12,7 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
 - Cache folder picker (system folder picker, Android 10+). Only the `Tstream-cache` sub-folder is ever written/deleted.
 - Seed while watching (off by default, only available with smart cache off). Shows upload speed in the player. Seeding stops and the cache is deleted when you leave the player.
 - Player engine: libVLC. Software decoders cover formats the phone's chip can't decode (e.g. 10-bit HEVC), and libass
-  renders ASS/SSA with the release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings.
+  renders ASS/SSA with the release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings. Hardware decoding, fast software decoding and the audio output are switchable in Settings.
 - Player: double-tap left/right = -/+10 s (middle = play/pause), vertical swipe on the left half = volume,
   hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream), subtitle picker
   (SRT / ASS / SSA / VTT files from the torrent, plus tracks embedded in the video), audio track picker, speed picker, resume position per exact title.

@@ -82,6 +82,14 @@ class SettingsActivity : AppCompatActivity() {
             val size = when (checkedId) { b.btnSubSmall.id -> 0; b.btnSubLarge.id -> 2; else -> 1 }
             AppSettings.update(this) { it.copy(subtitleSize = size) }
         }
+        b.switchHw.setOnCheckedChangeListener { _, on ->
+            if (!binding) AppSettings.update(this) { it.copy(hardwareDecoding = on) }
+        }
+        b.aoutGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (binding || !isChecked) return@addOnButtonCheckedListener
+            val out = when (checkedId) { b.btnAoutTrack.id -> 1; b.btnAoutSles.id -> 2; else -> 0 }
+            AppSettings.update(this) { it.copy(audioOutput = out) }
+        }
         b.switchFast.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(fastDecode = on) }
         }
@@ -125,6 +133,8 @@ class SettingsActivity : AppCompatActivity() {
         b.switchRemember.isChecked = s.rememberPosition
         b.subSizeGroup.check(when (s.subtitleSize) { 0 -> b.btnSubSmall.id; 2 -> b.btnSubLarge.id; else -> b.btnSubMedium.id })
         b.switchFast.isChecked = s.fastDecode
+        b.switchHw.isChecked = s.hardwareDecoding
+        b.aoutGroup.check(when (s.audioOutput) { 1 -> b.btnAoutTrack.id; 2 -> b.btnAoutSles.id; else -> b.btnAoutAuto.id })
         binding = false
         b.aheadLayout.isEnabled = s.smartCache
         b.behindLayout.isEnabled = s.smartCache

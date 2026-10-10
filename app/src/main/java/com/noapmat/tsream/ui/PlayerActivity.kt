@@ -72,6 +72,7 @@ class PlayerActivity : AppCompatActivity() {
     private var userSeeking = false
     private var fastForwarding = false
     private var speedBeforeHold = 1f
+    private var volumeBeforeHold = 100
     private var volumeAccum = 0f
     private var fileIndex = -1
     private var title = ""
@@ -107,7 +108,9 @@ class PlayerActivity : AppCompatActivity() {
             if (locked) return
             fastForwarding = true
             speedBeforeHold = m.getRate()
+            volumeBeforeHold = m.getVolume()
             m.setRate(2f)
+            m.setVolume(0) // no time-stretching at 2x: saves CPU, and sped-up audio is just noise anyway
             showHud("2\u00D7 speed", persistent = true)
         }
 
@@ -115,6 +118,7 @@ class PlayerActivity : AppCompatActivity() {
             if (!fastForwarding) return
             fastForwarding = false
             mp?.setRate(speedBeforeHold)
+            mp?.setVolume(volumeBeforeHold)
             ui.removeCallbacks(hideHud)
             b.hud.visibility = View.GONE
         }
@@ -176,6 +180,10 @@ class PlayerActivity : AppCompatActivity() {
             libVlc = vlc
             val m = MediaPlayer(vlc)
             mp = m
+            when (s.audioOutput) {
+                1 -> m.setAudioOutput("audiotrack")
+                2 -> m.setAudioOutput("opensles")
+            }
             m.attachViews(b.videoLayout, null, true, false)
             m.setEventListener(object : MediaPlayer.EventListener {
                 override fun onEvent(event: MediaPlayer.Event) {
@@ -186,7 +194,8 @@ class PlayerActivity : AppCompatActivity() {
             })
 
             val media = Media(vlc, Uri.parse(srv.url))
-            media.setHWDecoderEnabled(false, false) // hardware first, software when the chip can't do it
+            // hardware first, software when the chip can't do it (or software only when switched off in Settings)
+            media.setHWDecoderEnabled(s.hardwareDecoding, false)
             media.addOption(":network-caching=2500")
             val resume = if (rememberPosition && title.isNotBlank()) PositionStore.get(this@PlayerActivity, title) else null
             if (resume != null) {
@@ -233,24 +242,40 @@ class PlayerActivity : AppCompatActivity() {
     // ---- libVLC -------------------------------------------------------------------------------------------
 
     private fun createLibVlc(s: AppSettings): LibVLC {
-        val opts = arrayListOf(
+        // These are the options the real VLC app uses, so they are known to be accepted.
+        val core = arrayListOf(
+            "--audio-time-stretch",
+            // VLC's own app always uses soxr; the library default resampler sounds noticeably worse
+            "--audio-resampler=soxr",
+            // fast mode: skip the deblocking filter on non-key frames (what VLC picks for slow phones);
+            // normal: only on non-reference frames, which is invisible
+            "--avcodec-skiploopfilter=${if (s.fastDecode) 3 else 1}",
             "--freetype-rel-fontsize=${s.subtitleRelSize}", // plain subtitles (ASS keeps the script's own sizes)
-            "--freetype-background-opacity=0",              // no black box behind text
+        )
+        val sessionId = audio.generateAudioSessionId()
+        if (sessionId > 0) core += "--audiotrack-session-id=$sessionId"
+        val style = arrayListOf(
+            "--freetype-background-opacity=0", // no black box behind text
             "--freetype-outline-thickness=4",
             "--freetype-outline-color=0",
             "--freetype-outline-opacity=255",
             "--freetype-shadow-opacity=128",
-            "--audio-output=aaudio",
-            "--audio-track-format=s16b",
-            "--audio-filter=none",
-            "--no-audio-time-stretch"
         )
-        if (s.fastDecode) { opts += "--avcodec-skiploopfilter=4"; opts += "--avcodec-fast" }
-        return try {
-            LibVLC(this, opts)
-        } catch (e: Exception) {
-            LibVLC(this, arrayListOf("--audio-time-stretch")) // never fail just because of a cosmetic option
+        // "hurry up" lets the decoder drop *parts* of frames when the CPU is late, which is what smeared the
+        // picture at 2x. With it off, late frames are dropped whole instead.
+        val picky = arrayListOf("--no-avcodec-hurry-up")
+
+        // Never fail just because of a cosmetic or newer option: try the full set, then fewer options.
+        val attempts = listOf(core + style + picky, core + style, core, arrayListOf("--audio-time-stretch"))
+        var last: Exception? = null
+        for (opts in attempts) {
+            try {
+                return LibVLC(this, ArrayList(opts))
+            } catch (e: Exception) {
+                last = e
+            }
         }
+        throw last ?: IllegalStateException("libVLC could not start")
     }
 
     private fun onVlcEvent(type: Int, buffering: Float) {

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -64,7 +65,7 @@ class LibTorrentEngine(
     )
     private val _stats = MutableStateFlow(TorrentStats())
     override val stats: StateFlow<TorrentStats> = _stats.asStateFlow()
-    override val isOpen: Boolean get() = handle != null
+    override val isOpen: Boolean get() = handle?.isValid == true
     @Volatile private var metaFiles: List<TorrentFileMeta> = emptyList()
     override val files: List<TorrentFileMeta> get() = metaFiles
 
@@ -74,20 +75,32 @@ class LibTorrentEngine(
     @Volatile private var stream: LtFileStream? = null
     @Volatile private var cleanup: Job? = null
     @Volatile private var removal: CompletableDeferred<Unit>? = null
+    /** open() calls never overlap: a cancelled one finishes its cleanup before the next one starts. */
+    private val opMutex = Mutex()
+    /** Info hash (hex) of the torrent being opened; alerts about any other torrent are ignored. */
+    @Volatile private var expectedHash: String? = null
 
     private val listener = object : AlertListener {
         override fun types(): IntArray? = null // all alerts
         override fun alert(alert: Alert<*>) {
             when (alert.type()) {
                 AlertType.ADD_TORRENT -> {
-                    val h = owned((alert as AddTorrentAlert).handle())
-                    if (h != null) {
-                        handle = h // always track it, even before metadata, so close/retry can remove it
-                        if (h.torrentFile() != null) ready(h) // .torrent files: metadata already known
+                    val a = alert as AddTorrentAlert
+                    if (a.error().isError) {
+                        // e.g. duplicate_torrent: libtorrent hands back the OLD torrent, which is being removed.
+                        // Adopting it left the app with a dead torrent (no peers, no connections).
+                        pending?.completeExceptionally(IOException("Could not add the torrent: ${a.error().message}"))
+                    } else {
+                        val h = owned(a.handle())
+                        if (h != null && isExpected(h)) {
+                            handle = h // always track it, even before metadata, so close/retry can remove it
+                            if (h.torrentFile() != null) ready(h) // .torrent files: metadata already known
+                        }
                     }
                 }
                 AlertType.TORRENT_REMOVED -> removal?.complete(Unit)
-                AlertType.METADATA_RECEIVED -> owned((alert as MetadataReceivedAlert).handle())?.let { ready(it) }
+                AlertType.METADATA_RECEIVED ->
+                    owned((alert as MetadataReceivedAlert).handle())?.let { if (isExpected(it)) ready(it) }
                 AlertType.PIECE_FINISHED -> stream?.let {
                     it.onPieceFinished((alert as PieceFinishedAlert).pieceIndex())
                     it.signal()
@@ -105,6 +118,11 @@ class LibTorrentEngine(
      */
     private fun owned(fromAlert: TorrentHandle): TorrentHandle? =
         if (fromAlert.isValid) sm.find(fromAlert.infoHash()) else null
+
+    private fun isExpected(h: TorrentHandle): Boolean {
+        val expected = expectedHash ?: return true
+        return h.infoHash().toHex().equals(expected, ignoreCase = true)
+    }
 
     private fun ready(h: TorrentHandle) {
         val p = pending ?: return
@@ -181,20 +199,31 @@ class LibTorrentEngine(
 
     override suspend fun open(source: String): TorrentMeta = withContext(Dispatchers.IO) {
         startupGate()
+        opMutex.lock() // a previous (possibly cancelled) open() must finish its cleanup first
+        try {
+            openLocked(source)
+        } finally {
+            opMutex.unlock()
+        }
+    }
+
+    private suspend fun openLocked(source: String): TorrentMeta {
         closeTorrent()
-        cleanup?.join()
+        cleanup?.join() // the old torrent is confirmed removed before the same one can be added again
         root = rootProvider()
         start()
         applyNetworkSettings()
         root.mkdirs()
         val p = CompletableDeferred<TorrentHandle>()
-        pending = p
         try {
             if (source.startsWith("magnet:")) {
                 require(Magnet.isValid(source)) { "Invalid magnet link" }
+                synchronized(this) { expectedHash = Magnet.infoHashHex(source); pending = p }
                 sm.download(source, root, TorrentFlags.AUTO_MANAGED)
             } else {
-                sm.download(TorrentInfo(File(source)), root)
+                val info = TorrentInfo(File(source))
+                synchronized(this) { expectedHash = info.infoHash().toHex(); pending = p }
+                sm.download(info, root)
             }
             val h = withTimeoutOrNull(settings.metadataTimeoutMs) { p.await() }
                 ?: throw IOException(
@@ -213,7 +242,7 @@ class LibTorrentEngine(
                 )
             }
             metaFiles = files
-            TorrentMeta(ti.name(), files)
+            return TorrentMeta(ti.name(), files)
         } catch (t: Throwable) {
             closeTorrent()
             throw t
@@ -222,6 +251,7 @@ class LibTorrentEngine(
 
     override fun openFile(fileIndex: Int): FileStream {
         val h = handle ?: throw IllegalStateException("No torrent loaded")
+        if (!h.isValid) throw IllegalStateException("The torrent was closed - go back and open it again")
         val ti = h.torrentFile() ?: throw IllegalStateException("No metadata")
         require(fileIndex in 0 until ti.numFiles()) { "Bad file index" }
         h.prioritizeFiles(Array(ti.numFiles()) { if (it == fileIndex) Priority.TOP_PRIORITY else Priority.IGNORE })
@@ -255,9 +285,11 @@ class LibTorrentEngine(
         PieceMath.safeResolve(root, fs.filePath(fileIndex))
     }
 
+    @Synchronized
     override fun closeTorrent() {
         stream?.close(); stream = null
         pending?.cancel(); pending = null
+        expectedHash = null
         metaFiles = emptyList()
         val h = handle
         handle = null

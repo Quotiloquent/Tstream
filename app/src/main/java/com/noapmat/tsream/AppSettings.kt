@@ -11,7 +11,9 @@ data class AppSettings(
     val seedWhileWatching: Boolean = false,
     val rememberPosition: Boolean = true,    // resume where you left off, per exact title
     val subtitleSize: Int = 1,               // 0 small, 1 medium, 2 large (text subtitles; ASS keeps its own sizes)
-    val fastDecode: Boolean = false,         // skip loop filtering in software decoding: smoother, lower quality
+    val fastDecode: Boolean = false,         // skip some in-loop filtering in software decoding: smoother, slightly blockier
+    val hardwareDecoding: Boolean = true,    // try the phone's chip first; off = always decode on the CPU
+    val audioOutput: Int = 0,                // 0 automatic, 1 AudioTrack, 2 OpenSL ES
     val cacheDir: String = "",               // folder picked by the user, "" = app-private default
     val maxConnections: Int = 100,
     val downloadLimitBps: Int = 0,
@@ -61,6 +63,8 @@ data class AppSettings(
                 rememberPosition = p.getBoolean("rememberPosition", true),
                 subtitleSize = p.getInt("subtitleSize", 1).coerceIn(0, 2),
                 fastDecode = p.getBoolean("fastDecode", false),
+                hardwareDecoding = p.getBoolean("hardwareDecoding", true),
+                audioOutput = p.getInt("audioOutput", 0).coerceIn(0, 2),
                 cacheDir = p.getString("cacheDir", "") ?: "",
             )
         }
@@ -75,6 +79,8 @@ data class AppSettings(
                 .putBoolean("rememberPosition", s.rememberPosition)
                 .putInt("subtitleSize", s.subtitleSize)
                 .putBoolean("fastDecode", s.fastDecode)
+                .putBoolean("hardwareDecoding", s.hardwareDecoding)
+                .putInt("audioOutput", s.audioOutput)
                 .putInt("version", 2)
                 .putString("cacheDir", s.cacheDir)
                 .apply()
