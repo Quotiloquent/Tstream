@@ -317,7 +317,8 @@ internal class LtFileStream(
     private val firstPiece = PieceMath.pieceOf(base, pieceLen)
     private val lastPiece = PieceMath.pieceOf(base + maxOf(size, 1) - 1, pieceLen)
     /** Smart cache off = no window and no deletion: libtorrent just downloads the whole file into the folder. */
-    private val ahead = if (smart) CachePolicy.piecesFor(aheadBytes, pieceLen, 2) else numPieces
+    // at least 4 pieces even when pieces are huge, so several peers can work in parallel
+    private val ahead = if (smart) CachePolicy.piecesFor(aheadBytes, pieceLen, 4) else numPieces
     private val behind = CachePolicy.piecesFor(behindBytes, pieceLen, 1)
     private val evictOn = smart && evict
     private val jumpGap = minOf(ahead, MAX_DEADLINE_PIECES)
@@ -399,9 +400,9 @@ internal class LtFileStream(
         // Deadlines (ms): the piece being read, then the container index at the end of the file (mp4 moov /
         // mkv cues - the player cannot start without it), then the rest of the window.
         if (!have(first)) handle.setPieceDeadline(first, 100)
-        var d = 150
+        // the very last piece first; the one before it (an index that straddles a piece boundary) later
         for (p in maxOf(lastPiece - 1, firstPiece)..lastPiece) {
-            if (!have(p)) { handle.setPieceDeadline(p, d); d += 50 }
+            if (!have(p)) handle.setPieceDeadline(p, if (p == lastPiece) 150 else 700)
         }
         for (p in first + 1..minOf(hi, first + MAX_DEADLINE_PIECES - 1)) {
             if (!have(p)) handle.setPieceDeadline(p, 300 + (p - first) * 250)
@@ -441,14 +442,31 @@ internal class LtFileStream(
         return true
     }
 
+    @Volatile private var waitText: String? = null
+    override val waitInfo: String? get() = waitText
+
+    /** Which piece we are blocked on and how many of its 16 KB blocks have arrived (shown in the player). */
+    private fun describeWait(piece: Int) {
+        val q = try { handle.getDownloadQueue() } catch (e: Exception) { null }
+        val pi = q?.firstOrNull { it.pieceIndex() == piece }
+        val mb = pieceLen.toDouble() / (1 shl 20)
+        waitText = if (pi != null) {
+            "piece $piece: ${pi.finished()}/${pi.blocksInPiece()} blocks" +
+                (if (pi.requested() > 0) ", ${pi.requested()} requested" else "") + " (%.1f MB piece)".format(mb)
+        } else {
+            "piece $piece queued (%.1f MB piece)".format(mb)
+        }
+    }
+
     /**
-     * The player's buffer makes the loader read far ahead of what you are watching. Playhead lag = buffered
-     * time converted to bytes with the file's average bitrate, padded by 50% (VBR) plus 2 MB.
+     * The player reads ahead of what you are watching (VLC prefetches ~16 MB plus its decode buffers).
+     * Playhead lag = buffered time converted to bytes with the file's average bitrate, padded by 50% (VBR),
+     * plus 20 MB for the prefetch.
      */
     override fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {
         if (durationMs <= 0 || positionMs < 0) return
         val lagMs = (bufferedMs - positionMs).coerceAtLeast(0)
-        val lagBytes = (lagMs.toDouble() / durationMs * size * 1.5).toLong() + (2L shl 20)
+        val lagBytes = (lagMs.toDouble() / durationMs * size * 1.5).toLong() + (20L shl 20)
         lagPieces = ((lagBytes + pieceLen - 1) / pieceLen).toInt().coerceIn(1, numPieces)
     }
 
@@ -525,12 +543,15 @@ internal class LtFileStream(
                     startRecheck(); continue
                 } else if (have(first)) {
                     break
+                } else {
+                    describeWait(first)
                 }
                 lock.withLock { cond.await(500, TimeUnit.MILLISECONDS) } // woken by piece/check alerts
             }
         } catch (e: InterruptedException) {
             throw InterruptedIOException()
         }
+        waitText = null
         val wanted = global + length
         var end = (first + 1).toLong() * pieceLen
         var p = first + 1

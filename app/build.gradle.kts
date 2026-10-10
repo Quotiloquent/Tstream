@@ -14,6 +14,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {
@@ -31,18 +32,15 @@ android {
 }
 
 val lt = "2.1.0-35"
-val media3 = "1.4.1"
 
 dependencies {
     // BitTorrent engine (libtorrent via JNI) + native libs for each ABI
     implementation("org.libtorrent4j:libtorrent4j:$lt")
     implementation("org.libtorrent4j:libtorrent4j-android-arm64:$lt")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:$lt")
-    implementation("org.libtorrent4j:libtorrent4j-android-x86:$lt")
-    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:$lt")
 
-    implementation("androidx.media3:media3-exoplayer:$media3")
-    implementation("androidx.media3:media3-ui:$media3")
+    // Player engine: libVLC (software decoders for 10-bit HEVC etc., libass for real ASS/SSA rendering)
+    implementation("org.videolan.android:libvlc-all:3.6.2")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")

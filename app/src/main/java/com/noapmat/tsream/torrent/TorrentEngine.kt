@@ -34,6 +34,9 @@ interface FileStream {
     @Throws(IOException::class)
     fun awaitAvailable(position: Long, length: Int): Int
 
+    /** Human-readable progress of the piece the player is currently waiting for (null when not waiting). */
+    val waitInfo: String? get() = null
+
     /** Tells the stream where the playhead is so "keep behind" is measured from what you watch, not what is buffered. */
     fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {}
 

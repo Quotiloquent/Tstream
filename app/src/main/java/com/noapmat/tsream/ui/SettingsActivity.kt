@@ -77,6 +77,14 @@ class SettingsActivity : AppCompatActivity() {
             AppSettings.update(this) { it.copy(seedWhileWatching = on) }
             refreshUi()
         }
+        b.subSizeGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (binding || !isChecked) return@addOnButtonCheckedListener
+            val size = when (checkedId) { b.btnSubSmall.id -> 0; b.btnSubLarge.id -> 2; else -> 1 }
+            AppSettings.update(this) { it.copy(subtitleSize = size) }
+        }
+        b.switchFast.setOnCheckedChangeListener { _, on ->
+            if (!binding) AppSettings.update(this) { it.copy(fastDecode = on) }
+        }
         b.switchRemember.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(rememberPosition = on) }
         }
@@ -115,6 +123,8 @@ class SettingsActivity : AppCompatActivity() {
         b.switchSeed.isChecked = s.seeding          // always off while smart cache is on
         b.switchSeed.isEnabled = !s.smartCache
         b.switchRemember.isChecked = s.rememberPosition
+        b.subSizeGroup.check(when (s.subtitleSize) { 0 -> b.btnSubSmall.id; 2 -> b.btnSubLarge.id; else -> b.btnSubMedium.id })
+        b.switchFast.isChecked = s.fastDecode
         binding = false
         b.aheadLayout.isEnabled = s.smartCache
         b.behindLayout.isEnabled = s.smartCache

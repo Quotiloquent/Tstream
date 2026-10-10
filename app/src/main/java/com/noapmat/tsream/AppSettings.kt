@@ -10,6 +10,8 @@ data class AppSettings(
     val behindMb: Int = DEFAULT_BEHIND_MB,   // data further than this behind the playhead is deleted
     val seedWhileWatching: Boolean = false,
     val rememberPosition: Boolean = true,    // resume where you left off, per exact title
+    val subtitleSize: Int = 1,               // 0 small, 1 medium, 2 large (text subtitles; ASS keeps its own sizes)
+    val fastDecode: Boolean = false,         // skip loop filtering in software decoding: smoother, lower quality
     val cacheDir: String = "",               // folder picked by the user, "" = app-private default
     val maxConnections: Int = 100,
     val downloadLimitBps: Int = 0,
@@ -29,6 +31,9 @@ data class AppSettings(
      * counts when smart cache is off, whatever the stored switch says.
      */
     val seeding: Boolean get() = seedWhileWatching && !smartCache
+
+    /** libVLC "--freetype-rel-fontsize": the BIGGER the number, the SMALLER the text. */
+    val subtitleRelSize: Int get() = when (subtitleSize) { 0 -> 28; 2 -> 18; else -> 22 }
 
     /** RAM cap for the player's own buffer (it would otherwise grow to ~100+ MB). */
     val playerRamBytes: Int get() = (aheadMb * 3).coerceIn(48, 192) shl 20
@@ -54,6 +59,8 @@ data class AppSettings(
                 behindMb = p.getInt("behindMb", DEFAULT_BEHIND_MB).coerceIn(MIN_BEHIND_MB, MAX_MB),
                 seedWhileWatching = p.getBoolean("seed", false),
                 rememberPosition = p.getBoolean("rememberPosition", true),
+                subtitleSize = p.getInt("subtitleSize", 1).coerceIn(0, 2),
+                fastDecode = p.getBoolean("fastDecode", false),
                 cacheDir = p.getString("cacheDir", "") ?: "",
             )
         }
@@ -66,6 +73,8 @@ data class AppSettings(
                 .putInt("behindMb", s.behindMb.coerceIn(MIN_BEHIND_MB, MAX_MB))
                 .putBoolean("seed", s.seedWhileWatching)
                 .putBoolean("rememberPosition", s.rememberPosition)
+                .putInt("subtitleSize", s.subtitleSize)
+                .putBoolean("fastDecode", s.fastDecode)
                 .putInt("version", 2)
                 .putString("cacheDir", s.cacheDir)
                 .apply()

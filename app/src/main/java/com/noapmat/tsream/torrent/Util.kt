@@ -89,6 +89,32 @@ object StoragePaths {
     }
 }
 
+/** Parses the HTTP Range header used by the local stream server. */
+object HttpRange {
+    /**
+     * @return the inclusive byte range to send, the whole file when there is no (understandable) header,
+     * or null when the range lies outside the file (answer 416).
+     */
+    fun parse(header: String?, total: Long): LongRange? {
+        if (total <= 0) return null
+        val whole = 0L..(total - 1)
+        if (header == null || !header.startsWith("bytes=", ignoreCase = true)) return whole
+        val spec = header.substringAfter('=').substringBefore(',').trim()
+        val dash = spec.indexOf('-')
+        if (dash < 0) return whole
+        val a = spec.substring(0, dash).trim()
+        val b = spec.substring(dash + 1).trim()
+        if (a.isEmpty()) { // suffix range: the last n bytes
+            val n = b.toLongOrNull() ?: return whole
+            return if (n <= 0) null else maxOf(0L, total - n)..(total - 1)
+        }
+        val start = a.toLongOrNull() ?: return whole
+        if (start >= total) return null
+        val end = (b.toLongOrNull() ?: (total - 1)).coerceAtMost(total - 1)
+        return if (end < start) null else start..end
+    }
+}
+
 object Fmt {
     /** Transfer rate in bytes/second, e.g. "8.2 MB/s" or "120 KB/s". */
     fun rate(bps: Int): String =

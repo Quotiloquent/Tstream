@@ -1,5 +1,6 @@
 package com.noapmat.tsream
 
+import com.noapmat.tsream.torrent.HttpRange
 import com.noapmat.tsream.torrent.OrientationPicker
 import com.noapmat.tsream.torrent.OrientationPicker.Choice.LANDSCAPE
 import com.noapmat.tsream.torrent.OrientationPicker.Choice.PORTRAIT
@@ -37,5 +38,18 @@ class OrientationAndPathsTest {
         assertEquals("primary" to "a/b", StoragePaths.parseDocId("primary:/a/b/"))
         assertNull(StoragePaths.parseDocId("nonsense"))
         assertNull(StoragePaths.parseDocId(":x"))
+    }
+
+    @Test fun httpRanges() {
+        val total = 1000L
+        assertEquals(0L..999L, HttpRange.parse(null, total))
+        assertEquals(0L..999L, HttpRange.parse("bytes=0-", total))
+        assertEquals(100L..199L, HttpRange.parse("bytes=100-199", total))
+        assertEquals(500L..999L, HttpRange.parse("bytes=500-5000", total)) // end is clamped
+        assertEquals(900L..999L, HttpRange.parse("bytes=-100", total))     // last 100 bytes
+        assertEquals(0L..999L, HttpRange.parse("bytes=-5000", total))
+        assertNull(HttpRange.parse("bytes=1000-", total))                   // start beyond the file
+        assertNull(HttpRange.parse("bytes=300-200", total))
+        assertNull(HttpRange.parse(null, 0))
     }
 }

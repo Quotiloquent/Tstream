@@ -5,12 +5,16 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <androidx.media3.ui.PlayerView
-        android:id="@+id/player"
+    <org.videolan.libvlc.util.VLCVideoLayout
+        android:id="@+id/videoLayout"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        app:show_buffering="when_playing"
-        app:use_controller="true" />
+        android:layout_height="match_parent" />
+
+    <!-- catches all gestures on the picture -->
+    <View
+        android:id="@+id/touchLayer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
     <TextView
         android:id="@+id/info"
@@ -26,7 +30,7 @@
         android:textColor="@android:color/white"
         android:textSize="12sp" />
 
-    <!-- subtitles / screenshot / lock -->
+    <!-- audio / subtitles / screenshot / lock -->
     <LinearLayout
         android:id="@+id/controlsRow"
         android:layout_width="wrap_content"
@@ -35,6 +39,15 @@
         android:layout_margin="8dp"
         android:background="@drawable/bg_overlay"
         android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/btnAudio"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Audio track"
+            android:src="@drawable/ic_audio"
+            app:tint="@android:color/white" />
 
         <ImageButton
             android:id="@+id/btnSubtitles"
@@ -62,6 +75,66 @@
             android:contentDescription="Lock controls"
             android:src="@drawable/ic_lock"
             app:tint="@android:color/white" />
+    </LinearLayout>
+
+    <!-- play/pause, seek bar, speed -->
+    <LinearLayout
+        android:id="@+id/bottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_margin="8dp"
+        android:background="@drawable/bg_overlay"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="4dp"
+        android:paddingEnd="12dp">
+
+        <ImageButton
+            android:id="@+id/btnPlay"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Play or pause"
+            android:src="@drawable/ic_pause"
+            app:tint="@android:color/white" />
+
+        <TextView
+            android:id="@+id/tvPos"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="44dp"
+            android:text="0:00"
+            android:textColor="@android:color/white"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/seek"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/tvDur"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="44dp"
+            android:gravity="end"
+            android:text="0:00"
+            android:textColor="@android:color/white"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/btnSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:minWidth="48dp"
+            android:text="1×"
+            android:textColor="@android:color/white"
+            android:textSize="14sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <!-- shown only while locked -->
