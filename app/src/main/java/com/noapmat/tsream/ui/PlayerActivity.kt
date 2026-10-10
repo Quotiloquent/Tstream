@@ -240,9 +240,8 @@ class PlayerActivity : AppCompatActivity() {
             "--freetype-outline-color=0",
             "--freetype-outline-opacity=255",
             "--freetype-shadow-opacity=128",
-            "--audio-resampler=speex",
-            "--speex-resampler-quality=10",
-            "--audio-time-stretch",
+            "--aout=android_audiotrack",
+            "--android-audiotrack-passthrough=0",
         )
         if (s.fastDecode) { opts += "--avcodec-skiploopfilter=4"; opts += "--avcodec-fast" }
         return try {
