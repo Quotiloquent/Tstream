@@ -40,7 +40,7 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j-android-arm:$lt")
 
     // Player engine: libVLC (software decoders for 10-bit HEVC etc., libass for real ASS/SSA rendering)
-    implementation("org.videolan.android:libvlc-all:3.7.7")
+    implementation("org.videolan.android:libvlc-all:3.6.5")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
