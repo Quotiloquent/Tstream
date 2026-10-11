@@ -46,11 +46,16 @@ import kotlin.concurrent.withLock
  * exchange, SHA-1 verification, choking, rarest-first, IPv6 and web seeds, and runs on its own
  * native network threads (no thread-per-peer). We only add the streaming policy on top.
  */
+private const val RESUME_PAD_BYTES = 8L shl 20
+private const val WARM_LIMIT_BPS = 150_000
+
 class LibTorrentEngine(
     private val rootProvider: () -> File,
     private val settingsProvider: () -> AppSettings,
     /** Completes when the start-up cleanup of stale caches is done; nothing is opened before that. */
     private val startupGate: suspend () -> Unit = {},
+    /** Saved playhead byte offset for (file path, file size), or null. Used to prefetch near the resume point. */
+    private val resumeHint: (path: String, size: Long) -> Long? = { _, _ -> null },
 ) : TorrentEngine {
 
     /** Dedicated folder (always a "Tstream-cache" / app-private folder) re-read from settings on every open(). */
@@ -101,9 +106,13 @@ class LibTorrentEngine(
                 AlertType.TORRENT_REMOVED -> removal?.complete(Unit)
                 AlertType.METADATA_RECEIVED ->
                     owned((alert as MetadataReceivedAlert).handle())?.let { if (isExpected(it)) ready(it) }
-                AlertType.PIECE_FINISHED -> stream?.let {
-                    it.onPieceFinished((alert as PieceFinishedAlert).pieceIndex())
-                    it.signal()
+                AlertType.PIECE_FINISHED -> {
+                    val idx = (alert as PieceFinishedAlert).pieceIndex()
+                    onWarmPieceDone(idx)
+                    stream?.let {
+                        it.onPieceFinished(idx)
+                        it.signal()
+                    }
                 }
                 AlertType.TORRENT_CHECKED -> stream?.onChecked()
                 else -> Unit
@@ -133,24 +142,58 @@ class LibTorrentEngine(
         p.complete(h)
     }
 
+    private val warmPieces = HashSet<Int>()
+    @Volatile private var warming = false
+
     /**
-     * Nothing downloads until the user picks a file, except the first/last two pieces of the biggest video.
-     * That keeps peers interested (so they have already unchoked us) and the container index is on disk,
-     * so playback starts right away when that file is picked.
+     * Until the user picks a file the likely video (the biggest one) is prefetched gently:
+     *  - its first/last two pieces (container header and index) and, when a resume point is saved, the pieces
+     *    there come first;
+     *  - the rest of the file stays wanted at the lowest priority, so the torrent is never "finished":
+     *    a finished torrent makes seeds drop their connections to us and we then wait for reconnects;
+     *  - once those first pieces are in, the torrent is throttled to a trickle (see [onWarmPieceDone]).
+     * Picking a file ends all of this (see [openFile]).
      */
     private fun warmUp(h: TorrentHandle, ti: TorrentInfo) {
-        h.prioritizeFiles(Array(ti.numFiles()) { Priority.IGNORE }) // survives a later recheck
         val fs = ti.files()
         val pl = ti.pieceLength()
-        val best = (0 until ti.numFiles())
-            .filter { MediaTypes.looksPlayable(fs.filePath(it)) }
-            .maxByOrNull { fs.fileSize(it) } ?: return
-        val first = PieceMath.pieceOf(fs.fileOffset(best), pl)
-        val last = PieceMath.pieceOf(fs.fileOffset(best) + maxOf(fs.fileSize(best), 1) - 1, pl)
+        val n = ti.numFiles()
+        val best = (0 until n).filter { MediaTypes.looksPlayable(fs.filePath(it)) }.maxByOrNull { fs.fileSize(it) }
+        // file level (survives a recheck): the likely video stays wanted, everything else is ignored
+        h.prioritizeFiles(Array(n) { if (it == best) Priority.LOW else Priority.IGNORE })
+        if (best == null) return
+        val off = fs.fileOffset(best)
+        val size = fs.fileSize(best)
+        val first = PieceMath.pieceOf(off, pl)
+        val last = PieceMath.pieceOf(off + maxOf(size, 1) - 1, pl)
+        val hint = resumeHint(fs.filePath(best), size)
+        val start = if (hint != null && hint >= 0) resumePiece(off, hint, pl, first, last) else first
         val prios = Array(ti.numPieces()) { Priority.IGNORE }
-        for (p in first..minOf(first + 1, last)) prios[p] = Priority.DEFAULT
-        for (p in maxOf(last - 1, first)..last) prios[p] = Priority.DEFAULT
+        for (p in start..last) prios[p] = Priority.LOW // wanted from the resume point on: the beginning is skipped
+        val warm = LinkedHashSet<Int>()
+        for (p in first..minOf(first + 1, last)) warm += p
+        for (p in maxOf(last - 1, first)..last) warm += p
+        for (p in start..minOf(start + 2, last)) warm += p
+        for (p in warm) prios[p] = Priority.DEFAULT
         h.prioritizePieces(prios)
+        h.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+        synchronized(warmPieces) { warmPieces.clear(); warmPieces.addAll(warm) }
+        warming = true
+    }
+
+    /** Piece to start the window at for a saved playhead [bytes] (padded: the saved offset errs on the early side). */
+    private fun resumePiece(fileOffset: Long, bytes: Long, pieceLen: Int, first: Int, last: Int): Int =
+        (PieceMath.pieceOf(fileOffset + bytes + RESUME_PAD_BYTES, pieceLen) - 1).coerceIn(first, last)
+
+    private fun onWarmPieceDone(idx: Int) {
+        if (!warming) return
+        synchronized(warmPieces) {
+            if (warmPieces.remove(idx) && warmPieces.isEmpty()) {
+                // everything needed to start quickly is on disk: slow down so the torrent stays unfinished
+                // (and connected) while the user browses, without downloading much they may never watch
+                handle?.setDownloadLimit(WARM_LIMIT_BPS)
+            }
+        }
     }
 
     @Synchronized
@@ -191,6 +234,8 @@ class LibTorrentEngine(
         // so a tiny limit starves the download too.)
         sp.setInteger(settings_pack.int_types.unchoke_slots_limit.swigValue(), if (s.seeding) 8 else 0)
         sp.setInteger(settings_pack.int_types.allowed_fast_set_size.swigValue(), if (s.seeding) 5 else 0)
+        // A peer we lost (e.g. a seed that dropped us) may be retried after 5 s instead of the default 60 s.
+        sp.setInteger(settings_pack.int_types.min_reconnect_time.swigValue(), 5)
         // When every wanted piece in the window is downloaded libtorrent considers us "finished" and would drop
         // its connections to seeds; reconnecting then costs up to a minute of buffering when the window slides.
         sp.setBoolean(settings_pack.bool_types.close_redundant_connections.swigValue(), false)
@@ -249,17 +294,21 @@ class LibTorrentEngine(
         }
     }
 
-    override fun openFile(fileIndex: Int): FileStream {
+    override fun openFile(fileIndex: Int, startBytes: Long): FileStream {
         val h = handle ?: throw IllegalStateException("No torrent loaded")
         if (!h.isValid) throw IllegalStateException("The torrent was closed - go back and open it again")
         val ti = h.torrentFile() ?: throw IllegalStateException("No metadata")
         require(fileIndex in 0 until ti.numFiles()) { "Bad file index" }
+        // the gentle prefetch is over: full speed, no sequential mode, the smart-cache window takes over
+        warming = false
+        h.setDownloadLimit(0)
+        h.unsetFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
         h.prioritizeFiles(Array(ti.numFiles()) { if (it == fileIndex) Priority.TOP_PRIORITY else Priority.IGNORE })
         stream?.close()
         val s = settings
         return LtFileStream(
             h, ti, fileIndex, root, s.aheadBytes, s.behindBytes,
-            smart = s.smartCache, evict = s.smartCache,
+            smart = s.smartCache, evict = s.smartCache, startBytes = startBytes,
         ).also { stream = it }
     }
 
@@ -291,6 +340,8 @@ class LibTorrentEngine(
         pending?.cancel(); pending = null
         expectedHash = null
         metaFiles = emptyList()
+        warming = false
+        synchronized(warmPieces) { warmPieces.clear() }
         val h = handle
         handle = null
         _stats.value = TorrentStats()
@@ -332,6 +383,7 @@ internal class LtFileStream(
     behindBytes: Long,
     private val smart: Boolean,
     evict: Boolean,
+    startBytes: Long,
 ) : FileStream {
     private companion object {
         const val TAG = "LtFileStream"
@@ -353,6 +405,13 @@ internal class LtFileStream(
     private val ahead = if (smart) CachePolicy.piecesFor(aheadBytes, pieceLen, 4) else numPieces
     private val behind = CachePolicy.piecesFor(behindBytes, pieceLen, 1)
     private val evictOn = smart && evict
+
+    /** Where the download window starts: at the resume point when there is one, else at the beginning. */
+    private val startPiece: Int =
+        if (startBytes >= 0) (PieceMath.pieceOf(base + startBytes + (8L shl 20), pieceLen) - 1).coerceIn(firstPiece, lastPiece)
+        else firstPiece
+    /** While true, reads of the container header/index do not drag the window away from the resume point. */
+    private var hintHold = false
     private val jumpGap = minOf(ahead, MAX_DEADLINE_PIECES)
 
     private val lock = ReentrantLock()
@@ -374,8 +433,9 @@ internal class LtFileStream(
     private var checkDeadline = 0L
 
     init {
-        initPriorities(firstPiece)
-        refresh(firstPiece)
+        initPriorities(startPiece)
+        refresh(startPiece)
+        hintHold = startPiece > firstPiece // only now: the call above must not switch it off
     }
 
     // ---- availability: local bitmap first, native call only when unsure --------------------------
@@ -421,21 +481,35 @@ internal class LtFileStream(
     }
 
     /** Called whenever the reader moves to a new piece. */
+    /** Deadlines for the pieces every player needs: the container header and the index at the end. */
+    private fun structuralDeadlines() {
+        if (!have(firstPiece)) handle.setPieceDeadline(firstPiece, 100)
+        for (p in maxOf(lastPiece - 1, firstPiece)..lastPiece) {
+            if (!have(p)) handle.setPieceDeadline(p, if (p == lastPiece) 150 else 700)
+        }
+    }
+
     @Synchronized
     private fun refresh(first: Int) {
         if (first == lastFirst) return
+        if (hintHold) {
+            val nearResume = first in (startPiece - 1)..(startPiece + ahead)
+            if (CachePolicy.isProtected(first, firstPiece, lastPiece) && !nearResume) {
+                // A resuming player first reads the header (and index), then seeks. Keep the window where it is.
+                structuralDeadlines()
+                return
+            }
+            hintHold = false // reached the resume area, or anything else: normal behaviour from here on
+        }
         val jump = lastFirst < 0 || first < lastFirst - 2 || first > lastFirst + jumpGap
         lastFirst = first
         val hi = minOf(lastPiece, first + ahead)
         if (jump) handle.clearPieceDeadlines() // seek: stop chasing the old region
         if (smart) setWindow(first, hi)
-        // Deadlines (ms): the piece being read, then the container index at the end of the file (mp4 moov /
-        // mkv cues - the player cannot start without it), then the rest of the window.
+        // Deadlines (ms): the piece being read, then the container header/index (mp4 moov / mkv cues - the
+        // player cannot start without them), then the rest of the window.
         if (!have(first)) handle.setPieceDeadline(first, 100)
-        // the very last piece first; the one before it (an index that straddles a piece boundary) later
-        for (p in maxOf(lastPiece - 1, firstPiece)..lastPiece) {
-            if (!have(p)) handle.setPieceDeadline(p, if (p == lastPiece) 150 else 700)
-        }
+        structuralDeadlines()
         for (p in first + 1..minOf(hi, first + MAX_DEADLINE_PIECES - 1)) {
             if (!have(p)) handle.setPieceDeadline(p, 300 + (p - first) * 250)
         }
@@ -478,16 +552,25 @@ internal class LtFileStream(
     override val waitInfo: String? get() = waitText
 
     /** Which piece we are blocked on and how many of its 16 KB blocks have arrived (shown in the player). */
-    private fun describeWait(piece: Int) {
+    private var lastNudge = 0L
+
+    private fun describeWait(piece: Int, waitStart: Long) {
         val q = try { handle.getDownloadQueue() } catch (e: Exception) { null }
+        val st = try { handle.status() } catch (e: Exception) { null }
         val pi = q?.firstOrNull { it.pieceIndex() == piece }
         val mb = pieceLen.toDouble() / (1 shl 20)
-        waitText = if (pi != null) {
+        val now = System.currentTimeMillis()
+        // No peer for a while: make sure the torrent is running and ask the trackers for peers again.
+        if (st != null && st.numPeers() == 0 && now - waitStart > 4000 && now - lastNudge > 15_000) {
+            lastNudge = now
+            try { handle.resume(); handle.forceReannounce() } catch (e: Exception) { /* best effort */ }
+        }
+        waitText = (if (pi != null) {
             "piece $piece: ${pi.finished()}/${pi.blocksInPiece()} blocks" +
                 (if (pi.requested() > 0) ", ${pi.requested()} requested" else "") + " (%.1f MB piece)".format(mb)
         } else {
             "piece $piece queued (%.1f MB piece)".format(mb)
-        }
+        }) + (st?.let { "\n${it.state().name.lowercase()}: ${it.numPeers()} connected, ${it.listPeers()} known, ${it.connectCandidates()} to try" } ?: "")
     }
 
     /**
@@ -500,6 +583,11 @@ internal class LtFileStream(
         val lagMs = (bufferedMs - positionMs).coerceAtLeast(0)
         val lagBytes = (lagMs.toDouble() / durationMs * size * 1.5).toLong() + (20L shl 20)
         lagPieces = ((lagBytes + pieceLen - 1) / pieceLen).toInt().coerceIn(1, numPieces)
+    }
+
+    override fun estimatedPlayheadBytes(): Long {
+        if (lagPieces >= numPieces || lastFirst < 0) return -1L
+        return (maxOf(firstPiece, lastFirst - lagPieces) - firstPiece).toLong() * pieceLen
     }
 
     // ---- events from the alert thread ----------------------------------------------------------
@@ -563,6 +651,7 @@ internal class LtFileStream(
     private fun doAwait(position: Long, length: Int): Int {
         val global = base + position
         val first = PieceMath.pieceOf(global, pieceLen).coerceIn(firstPiece, lastPiece)
+        val waitStart = System.currentTimeMillis()
         try {
             if (!isEvicted(first)) refresh(first)
             while (true) {
@@ -576,7 +665,7 @@ internal class LtFileStream(
                 } else if (have(first)) {
                     break
                 } else {
-                    describeWait(first)
+                    describeWait(first, waitStart)
                 }
                 lock.withLock { cond.await(500, TimeUnit.MILLISECONDS) } // woken by piece/check alerts
             }

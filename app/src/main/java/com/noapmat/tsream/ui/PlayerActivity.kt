@@ -166,14 +166,18 @@ class PlayerActivity : AppCompatActivity() {
         })
 
         job = lifecycleScope.launch {
+            // Where you stopped last time. The size must match, otherwise it is a different file with the same name.
+            val saved = if (rememberPosition && title.isNotBlank()) PositionStore.getFull(this@PlayerActivity, title) else null
+            val fileSize = app.engine.files.firstOrNull { it.index == fileIndex }?.size ?: -1L
+            val startBytes = if (saved != null && saved.bytes >= 0 && saved.size == fileSize) saved.bytes else -1L
             val stream = try {
-                withContext(Dispatchers.IO) { app.engine.openFile(fileIndex) }
+                withContext(Dispatchers.IO) { app.engine.openFile(fileIndex, startBytes) }
             } catch (e: Exception) {
                 b.info.text = "Error: ${e.message}"; return@launch
             }
             fileStream = stream
 
-            val srv = StreamServer(stream, mimeFor(title)).also { it.start() }
+            val srv = StreamServer(stream, mimeFor(title), holdFirstRead = saved != null && startBytes >= 0).also { it.start() }
             server = srv
 
             val vlc = createLibVlc(s)
@@ -197,7 +201,7 @@ class PlayerActivity : AppCompatActivity() {
             // hardware first, software when the chip can't do it (or software only when switched off in Settings)
             media.setHWDecoderEnabled(s.hardwareDecoding, false)
             media.addOption(":network-caching=2500")
-            val resume = if (rememberPosition && title.isNotBlank()) PositionStore.get(this@PlayerActivity, title) else null
+            val resume = saved?.positionMs
             if (resume != null) {
                 media.addOption(":start-time=${resume / 1000}")
                 toast("Resuming from ${clock(resume)}")
@@ -529,7 +533,11 @@ class PlayerActivity : AppCompatActivity() {
     private fun savePosition() {
         val m = mp ?: return
         if (released || ended || !rememberPosition || title.isBlank()) return
-        PositionStore.save(this, title, m.getTime(), m.getLength())
+        PositionStore.save(
+            this, title, m.getTime(), m.getLength(),
+            bytes = fileStream?.estimatedPlayheadBytes() ?: -1L,
+            size = fileStream?.size ?: -1L,
+        )
     }
 
     override fun onStop() {

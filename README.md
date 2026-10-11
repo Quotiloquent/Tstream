@@ -16,6 +16,8 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
 - Player: double-tap left/right = -/+10 s (middle = play/pause), vertical swipe on the left half = volume,
   hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream), subtitle picker
   (SRT / ASS / SSA / VTT files from the torrent, plus tracks embedded in the video), audio track picker, speed picker, resume position per exact title.
+- Resuming skips the beginning of the file: the byte position is saved with the time, so the download window starts
+  there (only the container header/index pieces are fetched from the start).
 - Cache left behind by a crash / killed process / swipe-away is wiped on the next launch.
 - Player orientation follows the video: landscape or portrait, whichever shows the picture larger.
 - Google Sans (OFL) bundled; Material You colours on Android 12+.

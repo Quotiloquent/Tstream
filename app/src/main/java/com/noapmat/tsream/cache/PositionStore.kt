@@ -9,21 +9,29 @@ object PositionStore {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun get(ctx: Context, title: String): Long? =
-        prefs(ctx).getString(title, null)?.substringBefore('|')?.toLongOrNull()
+    /** [bytes] is where the playhead was inside the file ([size] bytes long), or -1 when unknown. */
+    class Saved(val positionMs: Long, val bytes: Long, val size: Long)
+
+    fun getFull(ctx: Context, title: String): Saved? {
+        val parts = prefs(ctx).getString(title, null)?.split('|') ?: return null
+        val pos = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        return Saved(pos, parts.getOrNull(2)?.toLongOrNull() ?: -1L, parts.getOrNull(3)?.toLongOrNull() ?: -1L)
+    }
+
+    fun get(ctx: Context, title: String): Long? = getFull(ctx, title)?.positionMs
 
     /** Positions in the first 10 s or the last 30 s count as "not started" / "finished" and are forgotten. */
-    fun save(ctx: Context, title: String, positionMs: Long, durationMs: Long) {
+    fun save(ctx: Context, title: String, positionMs: Long, durationMs: Long, bytes: Long = -1L, size: Long = -1L) {
         if (title.isBlank()) return
         val p = prefs(ctx)
         if (positionMs < 10_000 || (durationMs > 0 && positionMs > durationMs - 30_000)) {
             p.edit().remove(title).apply()
             return
         }
-        val e = p.edit().putString(title, "$positionMs|${System.currentTimeMillis()}")
+        val e = p.edit().putString(title, "$positionMs|${System.currentTimeMillis()}|$bytes|$size")
         val all = p.all
         if (all.size >= MAX_ENTRIES) {
-            all.entries.sortedBy { (it.value as? String)?.substringAfter('|')?.toLongOrNull() ?: 0L }
+            all.entries.sortedBy { (it.value as? String)?.split('|')?.getOrNull(1)?.toLongOrNull() ?: 0L }
                 .take(all.size - MAX_ENTRIES + 20).forEach { e.remove(it.key) }
         }
         e.apply()

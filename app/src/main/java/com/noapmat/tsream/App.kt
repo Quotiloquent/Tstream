@@ -2,6 +2,7 @@ package com.noapmat.tsream
 
 import android.app.Application
 import com.google.android.material.color.DynamicColors
+import com.noapmat.tsream.cache.PositionStore
 import com.noapmat.tsream.cache.StaleCache
 import com.noapmat.tsream.torrent.LibTorrentEngine
 import com.noapmat.tsream.torrent.TorrentEngine
@@ -31,6 +32,11 @@ class App : Application() {
             rootProvider = { AppSettings.cacheRoot(this).also { AppSettings.rememberRoot(this, it) } },
             settingsProvider = { settings },
             startupGate = { startupCleanup.await() }, // nothing is opened before stale caches are gone
+            resumeHint = { path, size ->
+                // where you stopped in this exact file, so the download starts there and not at the beginning
+                if (!settings.rememberPosition) null
+                else PositionStore.getFull(this, path)?.takeIf { it.size == size && it.bytes >= 0 }?.bytes
+            },
         )
     }
 

@@ -16,7 +16,18 @@ import java.util.concurrent.Executors
  * The newest connection wins: players re-open the stream with a new Range after every seek, so older
  * handlers (possibly still waiting for a piece at the old position) are interrupted.
  */
-class StreamServer(private val stream: FileStream, private val mime: String) {
+class StreamServer(
+    private val stream: FileStream,
+    private val mime: String,
+    /** True when playback resumes somewhere in the middle: the first connection is held after the header. */
+    private val holdFirstRead: Boolean = false,
+) {
+    private companion object {
+        const val HEAD_BYTES = 2L shl 20
+        const val HOLD_MS = 3000L
+    }
+    @Volatile private var holdUsed = false
+
     private val token = UUID.randomUUID().toString().replace("-", "")
     private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val pool = Executors.newCachedThreadPool { r -> Thread(r, "tstream-http").apply { isDaemon = true } }
@@ -96,6 +107,13 @@ class StreamServer(private val stream: FileStream, private val mime: String) {
             var pos = range.first
             var remaining = length
             while (remaining > 0 && !closed) {
+                if (holdFirstRead && !holdUsed && range.first == 0L && pos >= HEAD_BYTES) {
+                    // A resuming player reads the container header, then seeks to the saved position. Wait a moment
+                    // for that seek (the new connection interrupts us) instead of streaming the start of the file
+                    // it is about to skip. If it does not seek, we simply carry on after HOLD_MS.
+                    holdUsed = true
+                    Thread.sleep(HOLD_MS)
+                }
                 val n = stream.awaitAvailable(pos, minOf(buf.size.toLong(), remaining).toInt())
                 if (raf == null) raf = RandomAccessFile(stream.file, "r") // exists once the first piece is on disk
                 raf.seek(pos)

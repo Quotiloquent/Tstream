@@ -37,6 +37,9 @@ interface FileStream {
     /** Human-readable progress of the piece the player is currently waiting for (null when not waiting). */
     val waitInfo: String? get() = null
 
+    /** Estimated byte offset of the playhead (for resuming later), or -1 when not known yet. */
+    fun estimatedPlayheadBytes(): Long = -1L
+
     /** Tells the stream where the playhead is so "keep behind" is measured from what you watch, not what is buffered. */
     fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {}
 
@@ -59,8 +62,12 @@ interface TorrentEngine {
     /** Downloads one (small) file completely, e.g. a subtitle, and returns it. */
     suspend fun fetchFile(fileIndex: Int): File
 
-    /** Select a file for streaming: all other files are set to "do not download". */
-    fun openFile(fileIndex: Int): FileStream
+    /**
+     * Select a file for streaming: all other files are set to "do not download".
+     * [startBytes] (>= 0) is where the player is going to resume, so the download window is placed there
+     * from the start instead of at the beginning of the file.
+     */
+    fun openFile(fileIndex: Int, startBytes: Long = -1L): FileStream
 
     /** Stops the torrent and deletes everything it downloaded. Safe to call repeatedly. */
     fun closeTorrent()
