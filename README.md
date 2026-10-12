@@ -20,7 +20,10 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
   there (only the container header/index pieces are fetched from the start).
 - Nothing downloads in the background: torrents start in upload mode (metadata only), the browse-time prefetch is
   capped (speed and total size), cancelled loads are removed, and all network activity pauses when no screen is visible.
-- Cache left behind by a crash / killed process / swipe-away is wiped on the next launch.
+- Leaving the player stops the torrent and deletes its cache. The file list stays on the main screen, but the torrent is
+  not re-opened in the background: it is fetched again only when you pick a video.
+- Swiping the app away from Recents stops the torrent and wipes the cache right away (`ExitCleanupService`).
+- Cache left behind by a crash / force-stop is wiped on the next launch.
 - Player orientation follows the video: landscape or portrait, whichever shows the picture larger.
 - Google Sans (OFL) bundled; Material You colours on Android 12+.
 

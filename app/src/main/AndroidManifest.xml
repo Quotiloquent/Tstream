@@ -52,6 +52,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Gets onTaskRemoved when the app is swiped away from Recents: stops the torrent and wipes the cache. -->
+        <service
+            android:name=".cache.ExitCleanupService"
+            android:exported="false"
+            android:stopWithTask="false" />
+
         <activity android:name=".ui.SettingsActivity" android:exported="false" />
 
         <activity

@@ -141,7 +141,11 @@ class PlayerActivity : AppCompatActivity() {
         val seeding = s.seeding
         rememberPosition = s.rememberPosition
         fileIndex = intent.getIntExtra("index", -1)
-        title = app.engine.files.firstOrNull { it.index == fileIndex }?.path ?: ""
+        val source = intent.getStringExtra("source")
+        // The torrent is closed whenever the player is left, so it may not be loaded now: take the file's
+        // name and size from the intent (they are refreshed from the torrent once it is open).
+        title = intent.getStringExtra("path") ?: app.engine.files.firstOrNull { it.index == fileIndex }?.path ?: ""
+        var fileSize = intent.getLongExtra("size", -1L)
 
         b.touchLayer.setOnTouchListener(PlayerGestures(b.touchLayer, gestures))
         b.btnPlay.setOnClickListener { togglePlay(); scheduleAutoHide() }
@@ -166,12 +170,28 @@ class PlayerActivity : AppCompatActivity() {
         })
 
         job = lifecycleScope.launch {
+            // Leaving the player closed the torrent (no background download, cache wiped): open it again now.
+            if (!app.engine.isOpen) {
+                if (source == null) { b.info.text = "Error: the torrent is not loaded - go back and open it again"; return@launch }
+                b.info.visibility = View.VISIBLE
+                b.info.text = "Fetching torrent metadata (DHT / trackers)…"
+                try {
+                    app.engine.open(source)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    b.info.text = "Error: ${e.message ?: e.javaClass.simpleName}"; return@launch
+                }
+            }
+            app.engine.files.firstOrNull { it.index == fileIndex }?.let { title = it.path; fileSize = it.size }
+
             // Where you stopped last time. The size must match, otherwise it is a different file with the same name.
             val saved = if (rememberPosition && title.isNotBlank()) PositionStore.getFull(this@PlayerActivity, title) else null
-            val fileSize = app.engine.files.firstOrNull { it.index == fileIndex }?.size ?: -1L
             val startBytes = if (saved != null && saved.bytes >= 0 && saved.size == fileSize) saved.bytes else -1L
             val stream = try {
                 withContext(Dispatchers.IO) { app.engine.openFile(fileIndex, startBytes) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 b.info.text = "Error: ${e.message}"; return@launch
             }

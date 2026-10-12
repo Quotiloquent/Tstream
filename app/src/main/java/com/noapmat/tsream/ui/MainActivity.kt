@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.noapmat.tsream.App
+import com.noapmat.tsream.cache.ExitCleanupService
 import com.noapmat.tsream.databinding.ActivityMainBinding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +28,15 @@ class MainActivity : AppCompatActivity() {
     private val engine get() = (application as App).engine
     private val adapter = FileAdapter { f ->
         if (f.playable) {
-            startActivity(Intent(this, PlayerActivity::class.java).putExtra("index", f.index))
+            // The player gets the source too: the torrent is closed whenever you leave the player, so it
+            // re-opens it itself (see PlayerActivity) instead of this screen doing it in the background.
+            startActivity(
+                Intent(this, PlayerActivity::class.java)
+                    .putExtra("index", f.index)
+                    .putExtra("path", f.path)
+                    .putExtra("size", f.size)
+                    .putExtra("source", lastSource)
+            )
         } else if (f.subtitle) {
             Toast.makeText(this, "Subtitles are picked inside the player (CC button)", Toast.LENGTH_SHORT).show()
         } else {
@@ -36,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     }
     private var job: Job? = null
     private var lastSource: String? = null
+    private var torrentName = ""
     private var loaded = false
     private var loadGeneration = 0
 
@@ -60,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         b.btnSettings.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         b.inputLayout.setEndIconOnClickListener { pasteFromClipboard() }
 
+        ExitCleanupService.start(this)
         showDiagnostics()
         // Only act on the launch intent once; recreation must not re-open the torrent.
         if (savedInstanceState == null) handleIntent(intent)
@@ -119,6 +130,7 @@ class MainActivity : AppCompatActivity() {
                 val meta = engine.open(source)
                 adapter.submit(meta.files.sortedByDescending { it.playable }) // videos first, then subtitles/other
                 loaded = meta.files.isNotEmpty()
+                torrentName = meta.name
                 b.status.text = meta.name
             } catch (e: CancellationException) {
                 throw e
@@ -130,13 +142,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The player wipes the cache when you leave it; bring the file list back (metadata only, no data). */
+    /**
+     * Leaving the player stops the torrent and deletes its cache. The file list stays on screen, but the torrent
+     * is NOT re-opened here: doing that restarted the download (and refilled the cache) the moment you left the
+     * player. The player re-opens it only when you pick a video again.
+     */
     override fun onResume() {
         super.onResume()
-        val src = lastSource
-        if (src != null && loaded && !engine.isOpen && job?.isActive != true) {
-            load(src, null)
-            b.status.text = "Cache cleared. Reloading torrent\u2026"
+        if (loaded && job?.isActive != true && !engine.isOpen) {
+            b.status.text = "$torrentName\nStopped, cache cleared. Tap a video to stream it again."
         }
     }
 

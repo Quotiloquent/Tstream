@@ -46,6 +46,14 @@ class App : Application() {
 
     val engine: TorrentEngine get() = engineLazy.value
 
+    fun isTorrentOpen(): Boolean = engineLazy.isInitialized() && engineLazy.value.isOpen
+
+    /** The app is being removed from Recents: stop the torrent and delete every cache folder right now. */
+    fun shutDown() {
+        try { if (engineLazy.isInitialized()) engineLazy.value.closeTorrent() } catch (e: Exception) { /* best effort */ }
+        try { StaleCache.wipe(this) } catch (e: Exception) { /* best effort */ }
+    }
+
     private val ui = Handler(Looper.getMainLooper())
     private var visibleActivities = 0
     private val goBackground = Runnable { if (engineLazy.isInitialized()) engineLazy.value.setBackground(true) }
