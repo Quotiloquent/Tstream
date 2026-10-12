@@ -71,4 +71,7 @@ interface TorrentEngine {
 
     /** Stops the torrent and deletes everything it downloaded. Safe to call repeatedly. */
     fun closeTorrent()
+
+    /** True while no screen of the app is visible: downloading is paused until it is false again. */
+    fun setBackground(background: Boolean) {}
 }

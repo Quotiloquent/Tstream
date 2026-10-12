@@ -177,7 +177,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             fileStream = stream
 
-            val srv = StreamServer(stream, mimeFor(title), holdFirstRead = saved != null && startBytes >= 0).also { it.start() }
+            val srv = StreamServer(stream, mimeFor(title)).also { it.start() }
             server = srv
 
             val vlc = createLibVlc(s)
@@ -562,27 +562,37 @@ class PlayerActivity : AppCompatActivity() {
     private fun stopPlayback() {
         job?.cancel()
         ui.removeCallbacksAndMessages(null)
-        if (!released) {
-            savePosition()
-            released = true
-            val m = mp
-            mp = null
-            try {
-                m?.setEventListener(null)
-                m?.stop()
-                m?.detachViews()
-                m?.release()
-                libVlc?.release()
-            } catch (e: Exception) {
-                // already torn down
-            }
-            libVlc = null
-            server?.stop()
-            server = null
-        }
+        savePosition()
+        // 1. The torrent first. Nothing below may delay or prevent stopping the download (a hung VLC teardown
+        //    used to leave the torrent running in the background, filling the storage).
         if (!engineClosed) {
             engineClosed = true
             (application as App).engine.closeTorrent()
+        }
+        server?.stop()
+        server = null
+        // 2. VLC. stop()/release() can block while VLC waits on a stalled read, so never on the UI thread.
+        if (!released) {
+            released = true
+            val m = mp
+            val v = libVlc
+            mp = null
+            libVlc = null
+            try {
+                m?.setEventListener(null)
+                m?.detachViews() // touches views: UI thread
+            } catch (e: Exception) {
+                // already detached
+            }
+            Thread({
+                try {
+                    m?.stop()
+                    m?.release()
+                    v?.release()
+                } catch (e: Exception) {
+                    // already torn down
+                }
+            }, "vlc-release").start()
         }
     }
 
