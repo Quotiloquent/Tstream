@@ -651,7 +651,8 @@ internal class LtFileStream(
     }
 
     /**
-     * The player reads ahead of what you are watching (VLC prefetches ~16 MB plus its decode buffers).
+     * The player reads ahead of what you are watching (mpv's demuxer buffers up to MpvConfig.READAHEAD_SECS seconds, plus
+     * its probe and decode buffers).
      * Playhead lag = buffered time converted to bytes with the file's average bitrate, padded by 50% (VBR),
      * plus 20 MB for the prefetch.
      */

@@ -5,8 +5,9 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <org.videolan.libvlc.util.VLCVideoLayout
-        android:id="@+id/videoLayout"
+    <!-- libmpv renders into this surface (attached in PlayerActivity) -->
+    <SurfaceView
+        android:id="@+id/videoSurface"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 

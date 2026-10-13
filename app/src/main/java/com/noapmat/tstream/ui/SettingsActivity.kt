@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.text.Editable
+import android.text.TextWatcher
 import android.provider.Settings
 import android.view.View
 import android.widget.Toast
@@ -20,6 +22,8 @@ import com.noapmat.tstream.cache.CacheProbe
 import com.noapmat.tstream.cache.Cleanup
 import com.noapmat.tstream.cache.PositionStore
 import com.noapmat.tstream.cache.TreeUriPaths
+import com.noapmat.tstream.player.MpvFlags
+import com.noapmat.tstream.player.MpvPresets
 import com.noapmat.tstream.databinding.ActivitySettingsBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -59,11 +63,14 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(b.root)
         Fonts.apply(b.root)
         b.cachePath.typeface = Fonts.mono(this)
+        b.mpvFlags.typeface = Fonts.mono(this)
         b.toolbar.setNavigationOnClickListener { finish() }
 
         val s = AppSettings.load(this)
         b.ahead.setText(s.aheadMb.toString())
         b.behind.setText(s.behindMb.toString())
+        b.mpvFlags.setText(s.mpvFlags)
+        showMpvProblems(s.mpvFlags)
         refreshUi()
 
         b.switchSmart.setOnCheckedChangeListener { _, on ->
@@ -96,6 +103,26 @@ class SettingsActivity : AppCompatActivity() {
         b.switchShotSubs.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(screenshotSubtitles = on) }
         }
+        b.switchMpv.setOnCheckedChangeListener { _, on ->
+            if (binding) return@setOnCheckedChangeListener
+            AppSettings.update(this) { it.copy(mpvFlagsEnabled = on) }
+            refreshUi()
+        }
+        b.mpvFlags.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(t: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(t: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(e: Editable?) = showMpvProblems(e?.toString().orEmpty())
+        })
+        b.btnPresetQuality.setOnClickListener { applyPreset(MpvPresets.QUALITY) }
+        b.btnPresetPerf.setOnClickListener { applyPreset(MpvPresets.PERFORMANCE) }
+        b.btnPresetDefault.setOnClickListener { applyPreset(MpvPresets.DEFAULT) }
+        b.btnMpvManual.setOnClickListener {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mpv.io/manual/stable/#options")))
+            } catch (e: Exception) {
+                toast("No browser found. The manual is at mpv.io/manual/stable")
+            }
+        }
         b.switchRemember.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(rememberPosition = on) }
         }
@@ -118,7 +145,27 @@ class SettingsActivity : AppCompatActivity() {
         super.onPause()
         val ahead = b.ahead.text.toString().toIntOrNull() ?: AppSettings.DEFAULT_AHEAD_MB
         val behind = b.behind.text.toString().toIntOrNull() ?: AppSettings.DEFAULT_BEHIND_MB
-        AppSettings.update(this) { it.copy(aheadMb = ahead, behindMb = behind) } // clamped inside
+        val flags = b.mpvFlags.text?.toString().orEmpty().take(MpvFlags.MAX_CHARS)
+        AppSettings.update(this) { it.copy(aheadMb = ahead, behindMb = behind, mpvFlags = flags) } // clamped inside
+    }
+
+    /** Lists the lines of the custom mpv text that can't be used (the rest is applied; mpv itself judges the values). */
+    private fun showMpvProblems(text: String) {
+        val problems = MpvFlags.parse(text).problems
+        if (problems.isEmpty()) {
+            b.mpvProblems.visibility = View.GONE
+            return
+        }
+        b.mpvProblems.text = problems.take(4).joinToString("\n") { "Line ${it.line}: ${it.reason}" } +
+            if (problems.size > 4) "\n... and ${problems.size - 4} more" else ""
+        b.mpvProblems.visibility = View.VISIBLE
+    }
+
+    private fun applyPreset(text: String) {
+        b.mpvFlags.setText(text)
+        b.mpvFlags.setSelection(b.mpvFlags.text?.length ?: 0)
+        AppSettings.update(this) { it.copy(mpvFlagsEnabled = true, mpvFlags = text) }
+        refreshUi()
     }
 
     private fun refreshUi() {
@@ -138,12 +185,15 @@ class SettingsActivity : AppCompatActivity() {
         b.switchFast.isChecked = s.fastDecode
         b.switchHw.isChecked = s.hardwareDecoding
         b.switchShotSubs.isChecked = s.screenshotSubtitles
+        b.switchMpv.isChecked = s.mpvFlagsEnabled
         b.aoutGroup.check(when (s.audioOutput) { 1 -> b.btnAoutTrack.id; 2 -> b.btnAoutSles.id; else -> b.btnAoutAuto.id })
         binding = false
         b.aheadLayout.isEnabled = s.smartCache
         b.behindLayout.isEnabled = s.smartCache
         b.ahead.isEnabled = s.smartCache
         b.behind.isEnabled = s.smartCache
+        b.mpvFlags.isEnabled = s.mpvFlagsEnabled
+        b.mpvFlagsLayout.isEnabled = s.mpvFlagsEnabled
         b.seedWarning.visibility = if (s.smartCache) View.VISIBLE else View.GONE
     }
 

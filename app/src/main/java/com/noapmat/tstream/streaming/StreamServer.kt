@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 
 /**
  * Tiny HTTP server on 127.0.0.1 that serves one torrent file with Range support, so any player that can
- * open an http:// URL (libVLC here) can stream it. A request blocks until the pieces it needs are verified.
+ * open an http:// URL (libmpv here) can stream it. A request blocks until the pieces it needs are verified.
  * The newest connection wins: players re-open the stream with a new Range after every seek, so older
  * handlers (possibly still waiting for a piece at the old position) are interrupted.
  */

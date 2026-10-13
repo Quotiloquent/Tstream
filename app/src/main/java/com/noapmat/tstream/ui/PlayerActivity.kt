@@ -1,18 +1,14 @@
 package com.noapmat.tstream.ui
 
 import android.content.pm.ActivityInfo
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.media.AudioManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.view.PixelCopy
-import android.view.SurfaceView
+import android.os.SystemClock
+import android.view.SurfaceHolder
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.SeekBar
 import android.widget.TextView
@@ -28,11 +24,14 @@ import com.noapmat.tstream.AppSettings
 import com.noapmat.tstream.R
 import com.noapmat.tstream.cache.PositionStore
 import com.noapmat.tstream.databinding.ActivityPlayerBinding
+import com.noapmat.tstream.player.MpvConfig
+import com.noapmat.tstream.player.MpvFlags
+import com.noapmat.tstream.player.MpvFonts
+import com.noapmat.tstream.player.MpvRuntime
 import com.noapmat.tstream.streaming.StreamServer
 import com.noapmat.tstream.torrent.FileStream
 import com.noapmat.tstream.torrent.Fmt
 import com.noapmat.tstream.torrent.OrientationPicker
-import com.noapmat.tstream.torrent.PictureBox
 import com.noapmat.tstream.torrent.TorrentFileMeta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -41,51 +40,58 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.videolan.libvlc.LibVLC
-import org.videolan.libvlc.Media
-import org.videolan.libvlc.MediaPlayer
-import org.videolan.libvlc.interfaces.IMedia
-import kotlin.math.roundToInt
-
-/** Longest side of a saved screenshot, so a 4K+ video can't run the phone out of memory. */
-private const val MAX_SHOT_EDGE = 4096f
+import java.io.File
+import java.util.Locale
 
 /**
- * Plays the torrent through libVLC: software decoders when the phone's chip can't decode a format
- * (10-bit HEVC...), libass for real ASS/SSA rendering. VLC reads the file from a local HTTP server
- * ([StreamServer]) that waits for torrent pieces.
+ * Plays the torrent through libmpv: hardware decoding through MediaCodec with a software fallback (10-bit HEVC...),
+ * libass for real ASS/SSA rendering, and the user's own mpv options on top (Settings -> Advanced mpv options).
+ * mpv reads the file from a local HTTP server ([StreamServer]) that waits for torrent pieces.
+ *
+ * All libmpv calls go through [MpvRuntime]. The player state is read by polling a handful of mpv properties four
+ * times a second (off the UI thread) instead of subscribing to events.
  */
-class PlayerActivity : AppCompatActivity() {
+class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private lateinit var b: ActivityPlayerBinding
     private lateinit var audio: AudioManager
     private val ui = Handler(Looper.getMainLooper())
 
-    private var libVlc: LibVLC? = null
-    private var mp: MediaPlayer? = null
     private var server: StreamServer? = null
     private var fileStream: FileStream? = null
     private var job: Job? = null
 
     private var error: String? = null
+    private var mpvNotes: List<String> = emptyList() // options mpv refused / lines of the custom text that were skipped
+    private var customFlagsOn = false
     private var bufferPct = 0f
     private var aheadMs = 0L // how much video beyond the playhead is already downloaded
     private var playing = false
     private var ended = false
-    private var released = false
-    private var videoAttached = false   // libVLC is drawing into the layout's surfaces (they are gone while stopped)
-    private var vlcFailed = false       // VLC reported an error or stopped by itself: this player cannot be revived
+    @Volatile private var released = false
+    private var mpvFailed = false       // mpv could not open the file or stopped by itself: this player cannot be revived
     private var engineClosed = false
     private var orientationChosen = false
     private var controlsVisible = true
     private var locked = false
     private var userSeeking = false
     private var fastForwarding = false
-    private var speedBeforeHold = 1f
-    private var volumeBeforeHold = 100
+    private var speedBeforeHold = 1.0
+    private var curSpeed = 1.0
     private var volumeAccum = 0f
     private var fileIndex = -1
     private var title = ""
     private var rememberPosition = true
+
+    // mpv + surface (main thread)
+    private var mpvStarted = false      // start() was called: a core may exist and must be closed
+    private var surfaceReady = false
+    private var pendingUrl: String? = null // waiting for a surface to load into
+    private var voInUse = "gpu"
+    private var started = false         // mpv reported a position: the file is open
+    private var lastTimeMs = 0L
+    private var lastDurMs = 0L
+    private var idleStreak = 0
+    private var loadedAt = 0L
 
     private val hideHud = Runnable { b.hud.visibility = View.GONE }
     private val hideLeft = Runnable { b.seekLeft.visibility = View.GONE }
@@ -113,21 +119,19 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         override fun onHoldStart() {
-            val m = mp ?: return
-            if (locked) return
+            if (locked || !started || released) return
             fastForwarding = true
-            speedBeforeHold = m.getRate()
-            volumeBeforeHold = m.getVolume()
-            m.setRate(2f)
-            m.setVolume(0) // no time-stretching at 2x: saves CPU, and sped-up audio is just noise anyway
+            speedBeforeHold = curSpeed
+            MpvRuntime.setDouble("speed", 2.0)
+            MpvRuntime.setBool("mute", true) // sped-up audio is just noise, and muting skips the time-stretching work
             showHud("2x 》", persistent = true)
         }
 
         override fun onHoldEnd() {
             if (!fastForwarding) return
             fastForwarding = false
-            mp?.setRate(speedBeforeHold)
-            mp?.setVolume(volumeBeforeHold)
+            MpvRuntime.setDouble("speed", speedBeforeHold)
+            MpvRuntime.setBool("mute", false)
             ui.removeCallbacks(hideHud)
             b.hud.visibility = View.GONE
         }
@@ -144,6 +148,7 @@ class PlayerActivity : AppCompatActivity() {
         b.info.typeface = Fonts.mono(this)
         audio = getSystemService(AudioManager::class.java)
         volumeControlStream = AudioManager.STREAM_MUSIC
+        b.videoSurface.holder.addCallback(this)
 
         val app = application as App
         val s = app.settings
@@ -172,7 +177,7 @@ class PlayerActivity : AppCompatActivity() {
             override fun onStartTrackingTouch(sb: SeekBar) { userSeeking = true; ui.removeCallbacks(autoHide) }
 
             override fun onStopTrackingTouch(sb: SeekBar) {
-                mp?.setTime(sb.progress.toLong())
+                seekTo(sb.progress.toLong())
                 userSeeking = false
                 scheduleAutoHide()
             }
@@ -209,41 +214,16 @@ class PlayerActivity : AppCompatActivity() {
             val srv = StreamServer(stream, mimeFor(title)).also { it.start() }
             server = srv
 
-            val vlc = createLibVlc(s)
-            libVlc = vlc
-            val m = MediaPlayer(vlc)
-            mp = m
-            when (s.audioOutput) {
-                1 -> m.setAudioOutput("audiotrack")
-                2 -> m.setAudioOutput("opensles")
-            }
-            m.attachViews(b.videoLayout, null, true, false)
-            videoAttached = true
-            m.setEventListener(object : MediaPlayer.EventListener {
-                override fun onEvent(event: MediaPlayer.Event) {
-                    val type = event.type
-                    val buffering = event.buffering
-                    ui.post { onVlcEvent(type, buffering) }
-                }
-            })
-
-            val media = Media(vlc, Uri.parse(srv.url))
-            // hardware first, software when the chip can't do it (or software only when switched off in Settings)
-            media.setHWDecoderEnabled(s.hardwareDecoding, false)
-            media.addOption(":network-caching=2500")
             val resume = saved?.positionMs
-            if (resume != null) {
-                media.addOption(":start-time=${resume / 1000}")
-                toast("Resuming from ${clock(resume)}")
-            }
-            m.setMedia(media)
-            media.release()
-            m.play()
+            if (resume != null) toast("Resuming from ${clock(resume)}")
+            if (!startMpv(srv.url, resume?.let { it / 1000.0 }, s)) return@launch
 
             var tick = 0
             while (isActive) {
-                val t = m.getTime()
-                val len = m.getLength()
+                val st = withContext(Dispatchers.IO) { readState() } // property reads can block: never on the UI thread
+                applyState(st)
+                val t = lastTimeMs
+                val len = lastDurMs
                 if (!userSeeking && len > 0) {
                     b.seek.max = len.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                     b.seek.progress = t.coerceIn(0L, len).toInt()
@@ -257,91 +237,197 @@ class PlayerActivity : AppCompatActivity() {
                         aheadMs = (endMs - t).coerceAtLeast(0L)
                     }
                 }
-                if (tick % 2 == 0) {
-                    stream.updatePlayback(t, t + 12_000, if (len > 0) len else -1L)
-                    val st = app.engine.stats.value
+                if (tick % 4 == 0) {
+                    stream.updatePlayback(t, t + MpvConfig.READAHEAD_SECS * 1000L, if (len > 0) len else -1L)
+                    val tst = app.engine.stats.value
                     val buffering = bufferPct < 100f && !ended
                     b.info.visibility = if (buffering || error != null || (controlsVisible && !locked)) View.VISIBLE else View.GONE
                     b.info.text = buildString {
                         error?.let { appendLine(it) }
+                        mpvNotes.take(4).forEach { appendLine(it) }
+                        if (mpvNotes.size > 4) appendLine("... and ${mpvNotes.size - 4} more")
                         if (buffering) {
-                            appendLine("${bufferPct.toInt()}% • waiting for torrent pieces...")
+                            appendLine("${bufferPct.toInt()}% \u2022 waiting for torrent pieces...")
                             stream.waitInfo?.let { appendLine(it) }
-                            if (st.peers == 0) appendLine("No peers available yet.")
+                            if (tst.peers == 0) appendLine("No peers available yet.")
                         }
                         if (aheadMs > 0) appendLine("Buffered ${clock(aheadMs)} ahead")
-                        append("\u2193 ${Fmt.rate(st.downBps)}  ")
-                        if (seeding) append("\u2191 ${Fmt.rate(st.upBps)}  ") // upload only shown while seeding is on
-                        append("[P:${st.peers} | S:${st.seeds}]")
+                        append("\u2193 ${Fmt.rate(tst.downBps)}  ")
+                        if (seeding) append("\u2191 ${Fmt.rate(tst.upBps)}  ") // upload only shown while seeding is on
+                        append("[P:${tst.peers} | S:${tst.seeds}]")
                     }
                 }
-                if (++tick % 20 == 0) savePosition()
-                delay(500)
+                if (++tick % 40 == 0) savePosition()
+                delay(250)
             }
         }
     }
 
-    // ---- libVLC -------------------------------------------------------------------------------------------
+    // ---- libmpv -------------------------------------------------------------------------------------------
 
-    private fun createLibVlc(s: AppSettings): LibVLC {
-        // These are the options the real VLC app uses, so they are known to be accepted.
-        val core = arrayListOf(
-            "--audio-time-stretch",
-            // VLC's own app always uses soxr; the library default resampler sounds noticeably worse
-            "--audio-resampler=soxr",
-            // fast mode: skip the deblocking filter on non-key frames (what VLC picks for slow phones);
-            // normal: only on non-reference frames, which is invisible
-            "--avcodec-skiploopfilter=${if (s.fastDecode) 3 else 1}",
-            "--freetype-rel-fontsize=${s.subtitleRelSize}", // plain subtitles (ASS keeps the script's own sizes)
-        )
-        val sessionId = audio.generateAudioSessionId()
-        if (sessionId > 0) core += "--audiotrack-session-id=$sessionId"
-        val style = arrayListOf(
-            "--freetype-background-opacity=0", // no black box behind text
-            "--freetype-outline-thickness=4",
-            "--freetype-outline-color=0",
-            "--freetype-outline-opacity=255",
-            "--freetype-shadow-opacity=128",
-        )
-        // "hurry up" lets the decoder drop *parts* of frames when the CPU is late, which is what smeared the
-        // picture at 2x. With it off, late frames are dropped whole instead.
-        val picky = arrayListOf("--no-avcodec-hurry-up")
+    /**
+     * Starts mpv with the app's own options followed by the user's custom ones (so theirs win), then loads [url]
+     * as soon as a surface exists. If mpv refuses to start with the custom options, it is started again without
+     * them, so a typo in Settings can never lock the player out. Returns false when mpv cannot start at all.
+     */
+    private suspend fun startMpv(url: String, resumeSecs: Double?, s: AppSettings): Boolean {
+        val user = if (s.mpvFlagsEnabled) MpvFlags.parse(s.mpvFlags) else MpvFlags.Parsed(emptyList(), emptyList())
+        val base = MpvConfig.defaults(s, MpvFonts.ensure(this), resumeSecs)
+        val notes = ArrayList<String>()
+        user.problems.forEach { notes += "mpv options, line ${it.line}: ${it.reason}" }
 
-        // Never fail just because of a cosmetic or newer option: try the full set, then fewer options.
-        val attempts = listOf(core + style + picky, core + style, core, arrayListOf("--audio-time-stretch"))
-        var last: Exception? = null
-        for (opts in attempts) {
-            try {
-                return LibVLC(this, ArrayList(opts))
-            } catch (e: Exception) {
-                last = e
+        var withUser = user.options.isNotEmpty()
+        var rejected: List<String>? = null
+        mpvStarted = true // from here on a core may exist: stopPlayback() must close it
+        try {
+            rejected = runStart(base, user.options.map { it.name to it.value })
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (withUser) {
+                withUser = false
+                try {
+                    rejected = runStart(base, emptyList())
+                    notes += "mpv would not start with your custom options, so they were ignored"
+                } catch (e2: CancellationException) {
+                    throw e2
+                } catch (e2: Throwable) {
+                    b.info.text = "Error: ${e2.message ?: e2.javaClass.simpleName}"
+                    return false
+                }
+            } else {
+                b.info.text = "Error: ${e.message ?: e.javaClass.simpleName}"
+                return false
             }
         }
-        throw last ?: IllegalStateException("libVLC could not start")
+        if (rejected == null || released) return false // closed while starting
+
+        voInUse = if (withUser) MpvConfig.effectiveVo(user.options) else "gpu"
+        customFlagsOn = withUser
+        rejected.forEach { notes += "mpv ignored: $it" }
+        mpvNotes = notes
+
+        if (surfaceReady) attachAndLoad(url) else pendingUrl = url
+        return true
     }
 
-    private fun onVlcEvent(type: Int, buffering: Float) {
-        when (type) {
-            MediaPlayer.Event.Buffering -> bufferPct = buffering
-            MediaPlayer.Event.Playing -> { playing = true; bufferPct = 100f; updatePlayIcon(); chooseOrientation(); scheduleAutoHide() }
-            MediaPlayer.Event.Paused -> { playing = false; updatePlayIcon() }
-            MediaPlayer.Event.Stopped -> { playing = false; updatePlayIcon(); if (!ended && !released) vlcFailed = true }
-            MediaPlayer.Event.EndReached -> {
-                ended = true
-                playing = false
-                updatePlayIcon()
-                if (title.isNotBlank()) PositionStore.remove(this, title)
-                setControlsVisible(true)
-            }
-            MediaPlayer.Event.EncounteredError -> { error = "VLC could not play this file."; vlcFailed = true }
-            MediaPlayer.Event.Vout, MediaPlayer.Event.ESAdded -> chooseOrientation()
+    private suspend fun runStart(base: List<Pair<String, String>>, user: List<Pair<String, String>>): List<String>? =
+        withContext(Dispatchers.IO) { MpvRuntime.start(this@PlayerActivity, base + user) { released } }
+
+    private fun attachAndLoad(url: String) {
+        val holder = b.videoSurface.holder
+        MpvRuntime.attachSurface(holder.surface)
+        val r = holder.surfaceFrame
+        if (r.width() > 0 && r.height() > 0) MpvRuntime.setString("android-surface-size", "${r.width()}x${r.height()}")
+        // forces mpv to draw subtitles / the last frame into the surface even when it would otherwise not
+        MpvRuntime.setOption("force-window", "yes")
+        MpvRuntime.command("loadfile", url)
+        loadedAt = SystemClock.elapsedRealtime()
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        surfaceReady = true
+        if (!mpvStarted || released) return
+        val url = pendingUrl
+        if (url != null) {
+            pendingUrl = null
+            attachAndLoad(url)
+        } else {
+            // the surface came back after Home / another app: give mpv its video output again
+            MpvRuntime.attachSurface(holder.surface)
+            MpvRuntime.setOption("force-window", "yes")
+            MpvRuntime.setString("vo", voInUse)
         }
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        if (mpvStarted && !released) MpvRuntime.setString("android-surface-size", "${width}x$height")
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        surfaceReady = false
+        if (!mpvStarted || released) return
+        // Android destroys the surface while the screen is stopped: stop drawing into it and let go of it
+        MpvRuntime.setString("vo", "null")
+        MpvRuntime.setOption("force-window", "no")
+        MpvRuntime.detachSurface()
+    }
+
+    private class MpvState(
+        val timeMs: Long?, val durMs: Long?, val paused: Boolean?, val stalled: Boolean?, val cachePct: Int?,
+        val eof: Boolean?, val idle: Boolean?, val width: Int?, val height: Int?, val speed: Double?,
+    )
+
+    /** One snapshot of everything the UI needs; a property mpv can't give yet is simply null. Blocking: IO thread. */
+    private fun readState() = MpvState(
+        timeMs = MpvRuntime.getDouble("time-pos")?.let { (it * 1000).toLong() },
+        durMs = MpvRuntime.getDouble("duration")?.let { (it * 1000).toLong() },
+        paused = MpvRuntime.getBool("pause"),
+        stalled = MpvRuntime.getBool("paused-for-cache"),
+        cachePct = MpvRuntime.getInt("cache-buffering-state"),
+        eof = MpvRuntime.getBool("eof-reached"),
+        idle = MpvRuntime.getBool("idle-active"),
+        width = MpvRuntime.getInt("dwidth"),   // video size after aspect ratio and rotation: what is really shown
+        height = MpvRuntime.getInt("dheight"),
+        speed = MpvRuntime.getDouble("speed"),
+    )
+
+    private fun applyState(st: MpvState) {
+        if (released) return
+        st.timeMs?.let { lastTimeMs = it.coerceAtLeast(0L) }
+        st.durMs?.let { lastDurMs = it.coerceAtLeast(0L) }
+        st.speed?.let { curSpeed = it }
+        if (st.timeMs != null && !started) { started = true; scheduleAutoHide() }
+
+        bufferPct = when {
+            !started -> 0f
+            st.stalled == true -> (st.cachePct ?: 0).toFloat()
+            else -> 100f
+        }
+        val nowPlaying = started && st.paused == false && !ended
+        if (nowPlaying != playing) { playing = nowPlaying; updatePlayIcon(); if (playing) scheduleAutoHide() }
+
+        // End of file: mpv keeps the last frame up (keep-open) and flags it; if the user switched keep-open off,
+        // it goes idle right at the end instead.
+        val nearEnd = lastDurMs > 0 && lastTimeMs >= lastDurMs - 2500
+        val atEnd = started && (st.eof == true || (st.idle == true && nearEnd))
+        if (atEnd && !ended) {
+            ended = true
+            playing = false
+            updatePlayIcon()
+            if (title.isNotBlank()) PositionStore.remove(this, title)
+            setControlsVisible(true)
+        } else if (ended && st.eof == false && st.idle != true) {
+            ended = false // sought back or restarted
+        }
+
+        // mpv went idle without a file after loading one, and not at the end: it failed (or lost the stream)
+        val idleNow = st.idle == true && !atEnd && loadedAt > 0 && SystemClock.elapsedRealtime() - loadedAt > 2000
+        idleStreak = if (idleNow) idleStreak + 1 else 0
+        if (idleStreak >= 3 && !mpvFailed) {
+            mpvFailed = true
+            error = "mpv could not play this file." +
+                if (customFlagsOn) " Your custom mpv options may be the cause (Settings > Advanced mpv options)." else ""
+        }
+
+        val w = st.width
+        val h = st.height
+        if (!orientationChosen && w != null && h != null && w > 0 && h > 0) chooseOrientation(w.toFloat() / h)
     }
 
     private fun togglePlay() {
-        val m = mp ?: return
-        if (ended) { ended = false; m.setTime(0); m.play(); return }
-        if (m.isPlaying) { m.pause(); showHud("Paused") } else { m.play(); showHud("Playing") }
+        if (!started || released) return
+        if (ended) {
+            ended = false
+            MpvRuntime.command("seek", "0", "absolute")
+            MpvRuntime.setBool("pause", false)
+            return
+        }
+        if (playing) {
+            MpvRuntime.setBool("pause", true); playing = false; updatePlayIcon(); showHud("Paused")
+        } else {
+            MpvRuntime.setBool("pause", false); playing = true; updatePlayIcon(); showHud("Playing")
+        }
     }
 
     private fun updatePlayIcon() {
@@ -349,6 +435,29 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ---- subtitles / audio / speed -----------------------------------------------------------------------
+
+    private class Track(val id: Int, val label: String, val selected: Boolean)
+
+    private class PickEntry(val label: String, val selected: Boolean, val action: () -> Unit)
+
+    /** The video's tracks of one type ("sub" or "audio") from mpv's track list. Blocking: IO thread. */
+    private fun readTracks(type: String): List<Track> {
+        val n = MpvRuntime.getInt("track-list/count") ?: return emptyList()
+        val out = ArrayList<Track>()
+        for (i in 0 until n) {
+            if (MpvRuntime.getString("track-list/$i/type") != type) continue
+            val id = MpvRuntime.getInt("track-list/$i/id") ?: continue
+            val lang = MpvRuntime.getString("track-list/$i/lang")
+            val name = MpvRuntime.getString("track-list/$i/title")
+            val codec = MpvRuntime.getString("track-list/$i/codec")
+            val external = MpvRuntime.getBool("track-list/$i/external") == true
+            val label = listOfNotNull(
+                lang?.uppercase(Locale.ROOT), name, codec?.let { "($it)" }, if (external) "[external]" else null,
+            ).joinToString(" ").ifBlank { "Track $id" }
+            out += Track(id, label, MpvRuntime.getBool("track-list/$i/selected") == true)
+        }
+        return out
+    }
 
     /** Subtitle files of this torrent, those next to the video first. */
     private fun subtitleFiles(): List<TorrentFileMeta> {
@@ -358,29 +467,27 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun showSubtitlePicker() {
-        val m = mp ?: return
-        class Entry(val label: String, val selected: Boolean, val action: () -> Unit)
-
-        val entries = ArrayList<Entry>()
-        val current = m.getSpuTrack()
-        // embedded tracks (SRT, ASS ... inside the video) are kept; VLC lists "Disable" as id -1
-        m.getSpuTracks()?.forEach { t ->
-            entries += Entry(if (t.id == -1) "Off" else t.name, t.id == current) { m.setSpuTrack(t.id) }
+        if (!started || released) return
+        lifecycleScope.launch {
+            val tracks = withContext(Dispatchers.IO) { readTracks("sub") }
+            // embedded tracks (SRT, ASS ... inside the video) are kept; files from the torrent are added to them
+            val entries = ArrayList<PickEntry>()
+            entries += PickEntry("Off", tracks.none { it.selected }) { MpvRuntime.setString("sid", "no") }
+            for (t in tracks) entries += PickEntry(t.label, t.selected) { MpvRuntime.setString("sid", t.id.toString()) }
+            for (f in subtitleFiles()) entries += PickEntry(f.path.substringAfterLast('/') + " (file)", false) { useExternalSubtitle(f) }
+            if (entries.size <= 1) { toast("No subtitles found in this video or torrent"); return@launch }
+            MaterialAlertDialogBuilder(this@PlayerActivity)
+                .setTitle("Subtitles")
+                .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), entries.indexOfFirst { it.selected }.coerceAtLeast(0)) { d, which ->
+                    entries[which].action()
+                    d.dismiss()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
         }
-        if (entries.none { it.label == "Off" }) entries.add(0, Entry("Off", current == -1) { m.setSpuTrack(-1) })
-        for (f in subtitleFiles()) entries += Entry(f.path.substringAfterLast('/') + " (file)", false) { useExternalSubtitle(f) }
-        if (entries.size <= 1) { toast("No subtitles found in this video or torrent"); return }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Subtitles")
-            .setSingleChoiceItems(entries.map { it.label }.toTypedArray(), entries.indexOfFirst { it.selected }.coerceAtLeast(0)) { d, which ->
-                entries[which].action()
-                d.dismiss()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
     }
 
-    /** Downloads the subtitle file from the torrent, then hands it to VLC (embedded tracks stay available). */
+    /** Downloads the subtitle file from the torrent, then hands it to mpv (embedded tracks stay available). */
     private fun useExternalSubtitle(f: TorrentFileMeta) {
         toast("Downloading subtitle\u2026")
         lifecycleScope.launch {
@@ -391,33 +498,35 @@ class PlayerActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 toast("Couldn't download the subtitle: ${e.message}"); return@launch
             }
-            mp?.addSlave(IMedia.Slave.Type.Subtitle, Uri.fromFile(file), true)
+            MpvRuntime.command("sub-add", file.absolutePath, "select")
         }
     }
 
     private fun showAudioPicker() {
-        val m = mp ?: return
-        val tracks = m.getAudioTracks()
-        if (tracks == null || tracks.isEmpty()) { toast("No audio tracks yet"); return }
-        val current = m.getAudioTrack()
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Audio")
-            .setSingleChoiceItems(tracks.map { if (it.id == -1) "Off" else it.name }.toTypedArray(), tracks.indexOfFirst { it.id == current }.coerceAtLeast(0)) { d, which ->
-                m.setAudioTrack(tracks[which].id)
-                d.dismiss()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        if (!started || released) return
+        lifecycleScope.launch {
+            val tracks = withContext(Dispatchers.IO) { readTracks("audio") }
+            if (tracks.isEmpty()) { toast("No audio tracks yet"); return@launch }
+            MaterialAlertDialogBuilder(this@PlayerActivity)
+                .setTitle("Audio")
+                .setSingleChoiceItems(tracks.map { it.label }.toTypedArray(), tracks.indexOfFirst { it.selected }.coerceAtLeast(0)) { d, which ->
+                    MpvRuntime.setString("aid", tracks[which].id.toString())
+                    d.dismiss()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
     private fun showSpeedPicker() {
-        val m = mp ?: return
-        val speeds = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-        val labels = speeds.map { (if (it == it.toInt().toFloat()) it.toInt().toString() else it.toString()) + "\u00D7" }.toTypedArray()
+        if (!started || released) return
+        val speeds = doubleArrayOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+        val labels = speeds.map { (if (it == it.toInt().toDouble()) it.toInt().toString() else it.toString()) + "\u00D7" }.toTypedArray()
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback speed")
-            .setSingleChoiceItems(labels, speeds.indexOfFirst { it == m.getRate() }.coerceAtLeast(2)) { d, which ->
-                m.setRate(speeds[which])
+            .setSingleChoiceItems(labels, speeds.indexOfFirst { it == curSpeed }.coerceAtLeast(2)) { d, which ->
+                curSpeed = speeds[which]
+                MpvRuntime.setDouble("speed", curSpeed)
                 b.btnSpeed.text = labels[which]
                 d.dismiss()
             }
@@ -427,11 +536,16 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---- gestures / HUD ------------------------------------------------------------------------------------
 
+    private fun secs(ms: Long) = String.format(Locale.US, "%.3f", ms / 1000.0)
+
+    private fun seekTo(ms: Long) {
+        if (!started || released) return
+        MpvRuntime.command("seek", secs(ms.coerceAtLeast(0L)), "absolute")
+    }
+
     private fun seekBy(deltaMs: Long) {
-        val m = mp ?: return
-        val len = m.getLength()
-        val target = m.getTime() + deltaMs
-        m.setTime(if (len > 0) target.coerceIn(0L, len) else target.coerceAtLeast(0L))
+        if (!started || released) return
+        MpvRuntime.command("seek", secs(deltaMs), "relative")
     }
 
     private fun adjustVolume(fraction: Float) {
@@ -487,176 +601,37 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---- screenshot ----------------------------------------------------------------------------------------
 
-    private fun allSurfaces(v: View, out: MutableList<SurfaceView> = ArrayList()): List<SurfaceView> {
-        if (v is SurfaceView) out += v
-        if (v is ViewGroup) for (i in 0 until v.childCount) allSurfaces(v.getChildAt(i), out)
-        return out
-    }
-
-    private fun surfaceName(v: View): String =
-        if (v.id != View.NO_ID) try { resources.getResourceEntryName(v.id) } catch (e: Exception) { "" } else ""
-
-    // VLCVideoLayout has two surfaces: the video and the subtitles overlay (the video one comes first). The names
-    // are tried first; the order is the fallback in case resource names were shortened by the build.
-    private fun findVideoSurface(): SurfaceView? {
-        val all = allSurfaces(b.videoLayout)
-        return all.firstOrNull { surfaceName(it) == "surface_video" } ?: all.firstOrNull()
-    }
-
-    private fun findSubtitleSurface(video: SurfaceView): SurfaceView? {
-        val others = allSurfaces(b.videoLayout).filter { it !== video }
-        return others.firstOrNull { surfaceName(it) == "surface_subtitles" } ?: others.firstOrNull()
-    }
-
-    /** Size of the picture as the video really is (pixel aspect ratio and rotation applied), capped at [MAX_SHOT_EDGE]. */
-    private fun nativeFrameSize(m: MediaPlayer, fallback: SurfaceView): Pair<Int, Int> {
-        val t = m.getCurrentVideoTrack()
-        if (t == null || t.width <= 0 || t.height <= 0) return fallback.width to fallback.height
-        var w = t.width.toFloat() * (if (t.sarNum > 0 && t.sarDen > 0) t.sarNum.toFloat() / t.sarDen else 1f)
-        var h = t.height.toFloat()
-        if (t.orientation >= 4) { val x = w; w = h; h = x } // libvlc orientations 4..7 are rotated by 90 degrees
-        val k = minOf(1f, MAX_SHOT_EDGE / maxOf(w, h))
-        return maxOf(1, (w * k).roundToInt()) to maxOf(1, (h * k).roundToInt())
-    }
-
-    /** Aspect ratio (w/h) the picture is shown with (pixel aspect and rotation applied), or 0 when not known yet. */
-    private fun displayAspect(m: MediaPlayer): Float {
-        val t = m.getCurrentVideoTrack() ?: return 0f
-        if (t.width <= 0 || t.height <= 0) return 0f
-        var r = t.width.toFloat() * (if (t.sarNum > 0 && t.sarDen > 0) t.sarNum.toFloat() / t.sarDen else 1f) / t.height
-        if (t.orientation >= 4) r = 1f / r
-        return r
-    }
-
     /**
-     * Saves the current frame at the video's own resolution. PixelCopy reads the surface's buffer (not the screen)
-     * and scales it to the bitmap it is given, so a bitmap of the video's size gives the video's resolution
-     * instead of the smaller size the picture has on screen. The surface can be larger than the picture (libVLC
-     * draws the black bars into it), so the copy is cut down to the picture's box first; otherwise the bars would
-     * be squeezed into the frame together with the picture. With "Subtitles in screenshots" on, the subtitle
-     * overlay is copied the same way and drawn on top.
+     * Asks mpv to write the current frame as a PNG at the video's own resolution: just the picture (no letterbox
+     * bars), with the visible subtitle drawn in only when "Subtitles in screenshots" is on in Settings. The file is
+     * then copied to Pictures/Tstream.
      */
     private fun takeScreenshot() {
-        val m = mp ?: return
-        val pos = m.getTime()
-        val video = findVideoSurface()
-        if (video == null || video.width <= 0 || video.height <= 0) { toast("Nothing to capture yet"); return }
-        val (w, h) = nativeFrameSize(m, video)
-        val box = PictureBox.fit(video.width, video.height, displayAspect(m))
-        val subs = if ((application as App).settings.screenshotSubtitles) findSubtitleSurface(video) else null
-        val main = Handler(Looper.getMainLooper())
-        val withSubtitles = { frame: Bitmap ->
-            if (subs == null || subs.width <= 0 || subs.height <= 0) saveShot(frame, pos)
-            else copySubtitles(video, subs, frame, box, main) { saveShot(frame, pos) }
-        }
-        val barsInSurface = box.width != video.width || box.height != video.height
-        if (!barsInSurface) {
-            val frame = try {
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            } catch (e: OutOfMemoryError) {
-                toast("Not enough memory for a full-size screenshot"); return
-            }
-            PixelCopy.request(
-                video, frame,
-                PixelCopy.OnPixelCopyFinishedListener { result ->
-                    if (result == PixelCopy.SUCCESS) withSubtitles(frame) else toast("Couldn't capture this frame")
-                },
-                main,
-            )
-            return
-        }
-        // Bars inside the surface: copy the whole surface at a scale that gives the picture its native size
-        // (capped a little above MAX_SHOT_EDGE, the bars add to the size), then keep only the picture.
-        var k = w.toFloat() / box.width
-        val cap = MAX_SHOT_EDGE * 1.25f
-        val edge = maxOf(video.width, video.height) * k
-        if (edge > cap) k *= cap / edge
-        val full = try {
-            Bitmap.createBitmap(
-                (video.width * k).roundToInt().coerceAtLeast(1),
-                (video.height * k).roundToInt().coerceAtLeast(1),
-                Bitmap.Config.ARGB_8888,
-            )
-        } catch (e: OutOfMemoryError) {
-            toast("Not enough memory for a full-size screenshot"); return
-        }
-        PixelCopy.request(
-            video, full,
-            PixelCopy.OnPixelCopyFinishedListener { result ->
-                if (result != PixelCopy.SUCCESS) {
-                    full.recycle()
-                    toast("Couldn't capture this frame")
-                    return@OnPixelCopyFinishedListener
-                }
-                val x = (box.left * k).roundToInt().coerceIn(0, full.width - 1)
-                val y = (box.top * k).roundToInt().coerceIn(0, full.height - 1)
-                val cw = (box.width * k).roundToInt().coerceIn(1, full.width - x)
-                val ch = (box.height * k).roundToInt().coerceIn(1, full.height - y)
-                val frame = try {
-                    Bitmap.createBitmap(full, x, y, cw, ch)
-                } catch (e: OutOfMemoryError) {
-                    null
-                }
-                full.recycle()
-                if (frame == null) toast("Not enough memory for a full-size screenshot") else withSubtitles(frame)
-            },
-            main,
-        )
-    }
-
-    /**
-     * Draws the subtitle overlay onto [frame], mapped the same way as the picture (the part of the video surface
-     * inside [box] is what [frame] shows), then calls [done]; a failure just skips the subtitles.
-     */
-    private fun copySubtitles(video: SurfaceView, subs: SurfaceView, frame: Bitmap, box: PictureBox.Box, main: Handler, done: () -> Unit) {
-        val sx = frame.width.toFloat() / box.width
-        val sy = frame.height.toFloat() / box.height
-        val overlay = try {
-            Bitmap.createBitmap(
-                (subs.width * sx).roundToInt().coerceAtLeast(1),
-                (subs.height * sy).roundToInt().coerceAtLeast(1),
-                Bitmap.Config.ARGB_8888,
-            )
-        } catch (e: OutOfMemoryError) {
-            done(); return
-        }
-        PixelCopy.request(
-            subs, overlay,
-            PixelCopy.OnPixelCopyFinishedListener { result ->
-                if (result == PixelCopy.SUCCESS) {
-                    // the overlay normally covers exactly the video surface; the offset keeps it right if it doesn't
-                    val v = IntArray(2)
-                    val s = IntArray(2)
-                    video.getLocationOnScreen(v)
-                    subs.getLocationOnScreen(s)
-                    Canvas(frame).drawBitmap(overlay, (s[0] - v[0] - box.left) * sx, (s[1] - v[1] - box.top) * sy, null)
-                }
-                overlay.recycle()
-                done()
-            },
-            main,
-        )
-    }
-
-    private fun saveShot(bmp: Bitmap, pos: Long) {
+        if (!started || released) { toast("Nothing to capture yet"); return }
+        val pos = lastTimeMs
+        val mode = if ((application as App).settings.screenshotSubtitles) "subtitles" else "video"
+        val tmp = File(cacheDir, "shot-${SystemClock.elapsedRealtime()}.png")
         lifecycleScope.launch {
-            val where = withContext(Dispatchers.IO) { Screenshots.save(this@PlayerActivity, bmp, title.ifBlank { "video" }, pos) }
-            toast(if (where != null) "Saved to $where" else "Couldn't save the screenshot")
+            val where = withContext(Dispatchers.IO) {
+                try {
+                    MpvRuntime.command("screenshot-to-file", tmp.absolutePath, mode)
+                    if (tmp.length() > 0) Screenshots.save(this@PlayerActivity, tmp, title.ifBlank { "video" }, pos) else null
+                } finally {
+                    tmp.delete()
+                }
+            }
+            toast(if (where != null) "Saved to $where" else "Couldn't capture this frame")
         }
     }
 
     // ---- orientation / immersive ---------------------------------------------------------------------------
 
     /**
-     * Picks landscape or portrait from the video's real aspect ratio (pixel aspect and rotation included):
-     * whichever orientation makes the picture larger on this screen. Done once per playback.
+     * Picks landscape or portrait from the video's real aspect ratio (as mpv shows it: pixel aspect and rotation
+     * included): whichever orientation makes the picture larger on this screen. Done once per playback.
      */
-    private fun chooseOrientation() {
+    private fun chooseOrientation(ratio: Float) {
         if (orientationChosen) return
-        val t = mp?.getCurrentVideoTrack() ?: return
-        if (t.width <= 0 || t.height <= 0) return
-        var ratio = t.width.toFloat() * (if (t.sarNum > 0 && t.sarDen > 0) t.sarNum.toFloat() / t.sarDen else 1f) / t.height
-        if (t.orientation >= 4) ratio = 1f / ratio // libvlc orientations 4..7 are rotated by 90 degrees
         val dm = resources.displayMetrics
         val choice = OrientationPicker.pick(
             ratio,
@@ -689,50 +664,33 @@ class PlayerActivity : AppCompatActivity() {
     // ---- lifecycle -----------------------------------------------------------------------------------------
 
     private fun savePosition() {
-        val m = mp ?: return
-        if (released || ended || !rememberPosition || title.isBlank()) return
+        if (released || ended || !started || !rememberPosition || title.isBlank()) return
         PositionStore.save(
-            this, title, m.getTime(), m.getLength(),
+            this, title, lastTimeMs, lastDurMs,
             bytes = fileStream?.estimatedPlayheadBytes() ?: -1L,
             size = fileStream?.size ?: -1L,
         )
     }
 
     /**
-     * Back from Home / another app. Android destroys the video surfaces while the screen is stopped, and libVLC
-     * keeps drawing into the dead ones: the picture stays black, and play/pause or a seek do nothing visible.
-     * So the views are detached in [onStop] and attached again here (libVLC's own sample does the same). If VLC
-     * died while we were away (its connection to the local stream server broke, ...), the player can't be
-     * revived: restart it the way opening the file again does, from the saved position.
+     * Back from Home / another app. The video surface is gone while the screen is stopped; surfaceDestroyed /
+     * surfaceCreated hand it back to mpv by themselves. If mpv died while we were away (its connection to the
+     * local stream server broke, ...), the player can't be revived: restart it the way opening the file again
+     * does, from the saved position.
      */
     override fun onStart() {
         super.onStart()
-        val m = mp ?: return
         if (released) return
-        if (vlcFailed && !ended) { recreate(); return } // onStop saved the position; onCreate reopens the torrent there
-        if (!videoAttached) {
-            try {
-                m.attachViews(b.videoLayout, null, true, false)
-                videoAttached = true
-            } catch (e: Exception) {
-                recreate(); return
-            }
-            // paused with a fresh video output shows nothing until the next frame: a seek to the same spot draws it
-            val t = m.getTime()
-            if (t >= 0 && !m.isPlaying) m.setTime(t)
-        }
+        if (mpvFailed && !ended) recreate() // onStop saved the position; onCreate reopens the torrent there
     }
 
     override fun onStop() {
         super.onStop()
-        if (released) return
-        val m = mp ?: return
-        m.pause()
+        if (released || !started) return
+        MpvRuntime.setBool("pause", true)
+        playing = false
+        updatePlayIcon()
         savePosition()
-        if (videoAttached) {
-            videoAttached = false
-            try { m.detachViews() } catch (e: Exception) { /* already detached */ }
-        }
     }
 
     /**
@@ -753,7 +711,7 @@ class PlayerActivity : AppCompatActivity() {
         job?.cancel()
         ui.removeCallbacksAndMessages(null)
         savePosition()
-        // 1. The torrent first. Nothing below may delay or prevent stopping the download (a hung VLC teardown
+        // 1. The torrent first. Nothing below may delay or prevent stopping the download (a hung player teardown
         //    used to leave the torrent running in the background, filling the storage).
         if (!engineClosed) {
             engineClosed = true
@@ -761,28 +719,12 @@ class PlayerActivity : AppCompatActivity() {
         }
         server?.stop()
         server = null
-        // 2. VLC. stop()/release() can block while VLC waits on a stalled read, so never on the UI thread.
+        // 2. mpv. Destroying the core can block while it waits on a stalled read, so MpvRuntime does it on its own
+        //    thread; every call made after this point is a no-op.
         if (!released) {
             released = true
-            val m = mp
-            val v = libVlc
-            mp = null
-            libVlc = null
-            try {
-                m?.setEventListener(null)
-                m?.detachViews() // touches views: UI thread
-            } catch (e: Exception) {
-                // already detached
-            }
-            Thread({
-                try {
-                    m?.stop()
-                    m?.release()
-                    v?.release()
-                } catch (e: Exception) {
-                    // already torn down
-                }
-            }, "vlc-release").start()
+            b.videoSurface.holder.removeCallback(this)
+            if (mpvStarted) MpvRuntime.close()
         }
     }
 

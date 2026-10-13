@@ -2,7 +2,7 @@
 
 Paste a magnet link (or open a .torrent), pick a video, it plays while it downloads.
 
-`libVLC -> http://127.0.0.1 (StreamServer, Range) -> LtFileStream (piece window, deadlines, eviction) -> libtorrent4j -> peers/DHT/trackers`
+`libmpv -> http://127.0.0.1 (StreamServer, Range) -> LtFileStream (piece window, deadlines, eviction) -> libtorrent4j -> peers/DHT/trackers`
 
 ## Features
 - Smart cache (on by default): downloads at most *ahead* MB beyond the read position (default 25), deletes data more than
@@ -11,10 +11,17 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
 - Smart cache off: the whole file is cached straight into the cache folder.
 - Cache folder picker (system folder picker, Android 10+). Only the `Tstream-cache` sub-folder is ever written/deleted.
 - Seed while watching (off by default, only available with smart cache off). Shows upload speed in the player. Seeding stops and the cache is deleted when you leave the player.
-- Player engine: libVLC. Software decoders cover formats the phone's chip can't decode (e.g. 10-bit HEVC), and libass
-  renders ASS/SSA with the release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings. Hardware decoding, fast software decoding and the audio output are switchable in Settings.
+- Player engine: libmpv (mpv 0.41 + FFmpeg, via `dev.jdtech.mpv:libmpv`). Hardware decoding through MediaCodec with an automatic
+  software fallback for formats the phone's chip can't decode (e.g. 10-bit HEVC), GPU video output, libass renders ASS/SSA with the
+  release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings. Hardware decoding, fast software
+  decoding and the audio output are switchable in Settings.
+- Advanced mpv options (Settings): a text box that takes mpv.conf-style flags, one per line (`profile=gpu-hq`, `--deband=yes`,
+  `interpolation`, `no-deband`, `# comment`). They are applied after the app's own options, so they override them, and take effect the
+  next time a video starts. Presets: Quality, Performance, Default. A switch turns the custom flags off without deleting them; lines that
+  can't be parsed are flagged under the box, options mpv itself refuses are listed in the player's info box, and if mpv won't start with
+  the custom flags it is started again without them.
 - Player: double-tap left/right = -/+10 s (middle = play/pause), vertical swipe on the left half = volume,
-  hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream, saved at the video's own resolution, capped at 4096 px, picture only: the black bars of a letterboxed / pillarboxed screen are cut off; the visible subtitle is drawn onto it only if "Subtitles in screenshots" is on in Settings), subtitle picker
+  hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream, written by mpv at the video's own resolution, picture only without black bars; the visible subtitle is drawn onto it only if "Subtitles in screenshots" is on in Settings), subtitle picker
   (SRT / ASS / SSA / VTT files from the torrent, plus tracks embedded in the video), audio track picker, speed picker, resume position per exact title.
 - Resuming skips the beginning of the file: the byte position is saved with the time, so the download window starts
   there (only the container header/index pieces are fetched from the start).

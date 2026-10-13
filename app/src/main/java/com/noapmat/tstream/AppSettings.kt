@@ -1,6 +1,7 @@
 package com.noapmat.tstream
 
 import android.content.Context
+import com.noapmat.tstream.player.MpvFlags
 import java.io.File
 
 /** User settings (persisted in SharedPreferences) plus a few fixed defaults. 0 for limits means "unlimited". */
@@ -15,6 +16,8 @@ data class AppSettings(
     val hardwareDecoding: Boolean = true,    // try the phone's chip first; off = always decode on the CPU
     val audioOutput: Int = 0,                // 0 automatic, 1 AudioTrack, 2 OpenSL ES
     val screenshotSubtitles: Boolean = false, // draw the visible subtitles onto screenshots
+    val mpvFlagsEnabled: Boolean = true,     // apply the custom mpv options below (the text is kept when switched off)
+    val mpvFlags: String = "",               // mpv.conf style, one option per line; applied after the app's own options
     val cacheDir: String = "",               // folder picked by the user, "" = app-private default
     val maxConnections: Int = 100,
     val downloadLimitBps: Int = 0,
@@ -35,10 +38,10 @@ data class AppSettings(
      */
     val seeding: Boolean get() = seedWhileWatching && !smartCache
 
-    /** libVLC "--freetype-rel-fontsize": the BIGGER the number, the SMALLER the text. */
-    val subtitleRelSize: Int get() = when (subtitleSize) { 0 -> 28; 2 -> 18; else -> 22 }
+    /** mpv "sub-font-size" (its default is 55): the bigger the number, the bigger the text. Plain subtitles only. */
+    val subtitleFontSize: Int get() = when (subtitleSize) { 0 -> 42; 2 -> 72; else -> 55 }
 
-    /** RAM cap for the player's own buffer (it would otherwise grow to ~100+ MB). */
+    /** RAM cap for mpv's demuxer buffer (it would otherwise grow to 150 MB forward and 150 MB back). */
     val playerRamBytes: Int get() = (aheadMb * 3).coerceIn(48, 192) shl 20
 
     companion object {
@@ -67,6 +70,8 @@ data class AppSettings(
                 hardwareDecoding = p.getBoolean("hardwareDecoding", true),
                 audioOutput = p.getInt("audioOutput", 0).coerceIn(0, 2),
                 screenshotSubtitles = p.getBoolean("screenshotSubtitles", false),
+                mpvFlagsEnabled = p.getBoolean("mpvFlagsEnabled", true),
+                mpvFlags = (p.getString("mpvFlags", "") ?: "").take(MpvFlags.MAX_CHARS),
                 cacheDir = p.getString("cacheDir", "") ?: "",
             )
         }
@@ -84,6 +89,8 @@ data class AppSettings(
                 .putBoolean("hardwareDecoding", s.hardwareDecoding)
                 .putInt("audioOutput", s.audioOutput)
                 .putBoolean("screenshotSubtitles", s.screenshotSubtitles)
+                .putBoolean("mpvFlagsEnabled", s.mpvFlagsEnabled)
+                .putString("mpvFlags", s.mpvFlags.take(MpvFlags.MAX_CHARS))
                 .putInt("version", 2)
                 .putString("cacheDir", s.cacheDir)
                 .apply()

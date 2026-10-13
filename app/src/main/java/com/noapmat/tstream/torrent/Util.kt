@@ -1,7 +1,6 @@
 package com.noapmat.tstream.torrent
 
 import java.io.File
-import kotlin.math.roundToInt
 
 object Magnet {
     private val re = Regex(
@@ -113,30 +112,6 @@ object OrientationPicker {
         val landscape = fitArea(videoRatio, screenLong, screenShort)
         val portrait = fitArea(videoRatio, screenShort, screenLong)
         return if (landscape > portrait) Choice.LANDSCAPE else Choice.PORTRAIT
-    }
-}
-
-/**
- * Where the picture really is inside a video surface that is bigger than the picture. libVLC draws the black bars
- * (pillarbox / letterbox) into the surface itself, so copying the whole surface and scaling it to the video's size
- * squeezes the picture together with its bars. Screenshots copy the surface and cut it down to this box.
- */
-object PictureBox {
-    data class Box(val left: Int, val top: Int, val width: Int, val height: Int)
-
-    /**
-     * The largest box of aspect ratio [ratio] (w/h), centred in a [viewW] x [viewH] surface. Returns the whole
-     * surface when there are no bars (or within ~1% of it) or when something is unknown.
-     */
-    fun fit(viewW: Int, viewH: Int, ratio: Float): Box {
-        val full = Box(0, 0, maxOf(viewW, 0), maxOf(viewH, 0))
-        if (viewW <= 0 || viewH <= 0 || ratio <= 0f) return full
-        var w = viewW
-        var h = viewH
-        if (viewW.toFloat() / viewH > ratio) w = (viewH * ratio).roundToInt().coerceIn(1, viewW)
-        else h = (viewW / ratio).roundToInt().coerceIn(1, viewH)
-        if (viewW - w <= maxOf(2, viewW / 100) && viewH - h <= maxOf(2, viewH / 100)) return full
-        return Box((viewW - w) / 2, (viewH - h) / 2, w, h)
     }
 }
 
