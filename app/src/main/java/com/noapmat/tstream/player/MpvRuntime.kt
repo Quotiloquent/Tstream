@@ -14,7 +14,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
  * The ONLY place that talks to libmpv ([MPVLib]). Everything else in the app goes through here.
  *
  * Why a wrapper:
- *  - [MPVLib] is a process-wide singleton (one mpv core at a time). Leaving the player and opening another file
+ *  - [MPVLib] (libmpv 1.0.0+) is an instance: `MPVLib.create()` returns it and every call goes through it. This
+ *    object keeps the one live instance (one mpv core at a time). Leaving the player and opening another file
  *    quickly would otherwise let a new `create()` race the old `destroy()`. Create and destroy therefore run
  *    in order on one dedicated thread.
  *  - mpv calls are not safe once the core is destroyed. Every call is guarded: after [close] they return
@@ -27,7 +28,7 @@ object MpvRuntime {
     private val lock = ReentrantReadWriteLock()
 
     @Volatile private var alive = false // usable: created + initialised, not closing
-    private var created = false         // a native core exists (guarded by the lifecycle thread)
+    @Volatile private var mpv: MPVLib? = null // the native core, if one exists (written under the write lock)
 
     /**
      * Creates and initialises a core, applying [options] in order before init (so later entries win, which is
@@ -47,14 +48,14 @@ object MpvRuntime {
             try {
                 if (abort()) return@Callable null
                 val rejected = ArrayList<String>()
-                MPVLib.create(app)
-                created = true
+                val m = MPVLib.create(app) ?: throw IllegalStateException("mpv could not start")
+                mpv = m
                 try {
-                    for ((name, value) in options) if (!rawSetOption(name, value)) rejected += "$name=$value"
-                    MPVLib.init()
+                    for ((name, value) in options) if (!rawSetOption(m, name, value)) rejected += "$name=$value"
+                    m.init()
                 } catch (e: Throwable) {
-                    try { MPVLib.destroy() } catch (x: Throwable) { /* nothing more to do */ }
-                    created = false
+                    try { m.destroy() } catch (x: Throwable) { /* nothing more to do */ }
+                    mpv = null
                     throw e
                 }
                 alive = true
@@ -79,9 +80,10 @@ object MpvRuntime {
         lifecycle.execute {
             lock.writeLock().lock() // waits for calls that are already running
             try {
-                if (created) {
-                    created = false
-                    try { MPVLib.destroy() } catch (e: Throwable) { /* already gone */ }
+                val m = mpv
+                if (m != null) {
+                    mpv = null
+                    try { m.destroy() } catch (e: Throwable) { /* already gone */ }
                 }
             } finally {
                 lock.writeLock().unlock()
@@ -91,46 +93,44 @@ object MpvRuntime {
 
     // ---- guarded calls ---------------------------------------------------------------------------------
 
-    /** Runs [block] only while the core is alive; never blocks waiting for a shutdown in progress. */
-    private inline fun <T> guarded(block: () -> T): T? {
+    /**
+     * Runs [block] with the live core, only while it is alive; never blocks waiting for a shutdown in progress.
+     * The instance is read under the read lock, so [close] cannot destroy it while [block] runs.
+     */
+    private inline fun <T> guarded(block: (MPVLib) -> T): T? {
         if (!alive) return null
         if (!lock.readLock().tryLock()) return null
         try {
-            return if (alive) block() else null
+            val m = mpv
+            return if (alive && m != null) block(m) else null
         } finally {
             lock.readLock().unlock()
         }
     }
 
-    private inline fun read(block: () -> Any?): Any? = try { block() } catch (e: Exception) { null }
+    private inline fun <T> read(block: () -> T?): T? = try { block() } catch (e: Exception) { null }
 
-    fun attachSurface(surface: Surface) { guarded { MPVLib.attachSurface(surface) } }
-    fun detachSurface() { guarded { MPVLib.detachSurface() } }
+    fun attachSurface(surface: Surface) { guarded { it.attachSurface(surface) } }
+    fun detachSurface() { guarded { it.detachSurface() } }
 
     /** Runs an mpv command, e.g. `command("seek", "10", "relative")`. */
     fun command(vararg args: String) {
-        guarded { MPVLib.command(arrayOf(*args)) }
+        guarded { it.command(arrayOf(*args)) }
     }
 
-    fun setString(name: String, value: String) { guarded { MPVLib.setPropertyString(name, value) } }
-    fun setBool(name: String, value: Boolean) { guarded { MPVLib.setPropertyBoolean(name, value) } }
-    fun setDouble(name: String, value: Double) { guarded { MPVLib.setPropertyDouble(name, value) } }
+    fun setString(name: String, value: String) { guarded { it.setPropertyString(name, value) } }
+    fun setBool(name: String, value: Boolean) { guarded { it.setPropertyBoolean(name, value) } }
+    fun setDouble(name: String, value: Double) { guarded { it.setPropertyDouble(name, value) } }
 
     /** Sets an option on a running core (used for the few options that change with the surface). */
-    fun setOption(name: String, value: String) { guarded { rawSetOption(name, value) } }
+    fun setOption(name: String, value: String) { guarded { rawSetOption(it, name, value) } }
 
-    fun getString(name: String): String? = guarded { read { MPVLib.getPropertyString(name) } } as? String
-    fun getInt(name: String): Int? = (guarded { read { MPVLib.getPropertyInt(name) } } as? Number)?.toInt()
-    fun getDouble(name: String): Double? = (guarded { read { MPVLib.getPropertyDouble(name) } } as? Number)?.toDouble()
-    fun getBool(name: String): Boolean? = guarded { read { MPVLib.getPropertyBoolean(name) } } as? Boolean
+    fun getString(name: String): String? = guarded { m -> read { m.getPropertyString(name) } }
+    fun getInt(name: String): Int? = guarded { m -> read { m.getPropertyInt(name) } }
+    fun getDouble(name: String): Double? = guarded { m -> read { m.getPropertyDouble(name) } }
+    fun getBool(name: String): Boolean? = guarded { m -> read { m.getPropertyBoolean(name) } }
 
-    /**
-     * true when mpv accepted the option. The result is read as `Any?` on purpose: the library reports a negative
-     * mpv error code as an Int, and treating "no code" as success keeps this compiling whichever way the
-     * binding declares it.
-     */
-    private fun rawSetOption(name: String, value: String): Boolean {
-        val rc: Any? = try { MPVLib.setOptionString(name, value) } catch (e: Exception) { return false }
-        return (rc as? Int)?.let { it >= 0 } ?: true
-    }
+    /** true when mpv accepted the option (a negative mpv error code means it refused it). */
+    private fun rawSetOption(m: MPVLib, name: String, value: String): Boolean =
+        try { m.setOptionString(name, value) >= 0 } catch (e: Exception) { false }
 }
