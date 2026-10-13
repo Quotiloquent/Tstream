@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "com.noapmat.tstream"
-    compileSdk = 34
+    // libmpv 1.0.0 requires compileSdk >= 36 (checkDebugAarMetadata). This only allows newer APIs at compile time;
+    // targetSdk below (runtime behaviour) is deliberately left alone.
+    compileSdk = 36
     ndkVersion = "26.1.10909125"
 
     defaultConfig {
