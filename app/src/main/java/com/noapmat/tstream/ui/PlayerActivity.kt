@@ -603,66 +603,56 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     // ---- screenshot ----------------------------------------------------------------------------------------
 
     /**
-     * Asks mpv to write the current frame at the video's own resolution: just the picture (no letterbox bars), with
-     * the visible subtitle drawn in only when "Subtitles in screenshots" is on in Settings. The file is then copied
-     * to Pictures/Tstream. It is always mpv's own render, never a grab of the screen. PNG is tried first; JPEG
-     * (quality 100) is only a last resort if this libmpv build cannot write PNG.
+     * Saves the current frame at the video's own resolution (just the picture, no letterbox bars) to
+     * Pictures/Tstream as a lossless PNG. It is always mpv's own render, never a grab of the screen.
+     *
+     * This libmpv build ships no image encoder, so mpv's `screenshot-to-file` cannot write files here ("Could not
+     * open libavcodec encoder"). It is still tried once (it works on builds that have an encoder and also burns in
+     * subtitles); otherwise the raw frame is taken from mpv and encoded to PNG here, without subtitles.
      */
     private fun takeScreenshot() {
         if (!started || released) { toast("Nothing to capture yet"); return }
         val pos = lastTimeMs
-        val mode = if ((application as App).settings.screenshotSubtitles) "subtitles" else "video"
+        val withSubs = (application as App).settings.screenshotSubtitles
         val stamp = SystemClock.elapsedRealtime()
         lifecycleScope.launch {
             val report = ArrayList<String>()
-            val made = ArrayList<File>()
-            var shot: File? = null
+            var note = ""
             val where = withContext(Dispatchers.IO) {
+                val f = File(cacheDir, "shot-$stamp.png")
                 try {
-                    // mpv may hand control back before the file is complete: wait until it exists and stops growing
-                    fun waitForFile(f: File): Boolean {
-                        var last = -1L
-                        for (i in 0 until 20) {
-                            val len = f.length()
-                            if (len > 0 && len == last) return true
-                            last = len
-                            Thread.sleep(150)
-                        }
-                        return false
+                    var ok = false
+                    if (!mpvWriterUnavailable) {
+                        MpvRuntime.setString("screenshot-format", "png")
+                        val err = MpvRuntime.commandError(
+                            "screenshot-to-file", f.absolutePath, if (withSubs) "subtitles" else "video")
+                        ok = err == null && f.length() > 0
+                        if (!ok) { f.delete(); mpvWriterUnavailable = true; report += "mpv file writer: ${err ?: "failed"}" }
                     }
-
-                    fun attempt(fmt: String, flag: String?): Boolean {
-                        val f = File(cacheDir, "shot-$stamp-${made.size}.${if (fmt == "jpg") "jpg" else "png"}")
-                        made += f
-                        MpvRuntime.setString("screenshot-format", fmt)
-                        if (fmt == "jpg") MpvRuntime.setString("screenshot-jpeg-quality", "100")
-                        val err = if (flag != null) MpvRuntime.commandError("screenshot-to-file", f.absolutePath, flag)
-                        else MpvRuntime.commandError("screenshot-to-file", f.absolutePath)
-                        val ok = err == null && waitForFile(f)
-                        report += "$fmt/${flag ?: "default"}: ${err ?: if (ok) "ok" else "no file"}"
-                        if (ok) shot = f
-                        return ok
-                    }
-
-                    var ok = attempt("png", mode) || attempt("png", null)
-                    // A zero-copy MediaCodec frame lives only on the GPU: decode in copy mode just long enough to
-                    // take the picture, then put the user's setting back.
-                    val userHwdec = MpvRuntime.getString("hwdec") ?: ""
-                    if (!ok && userHwdec.startsWith("mediacodec") && userHwdec != "mediacodec-copy") {
-                        MpvRuntime.setString("hwdec", "mediacodec-copy")
-                        try {
-                            for (i in 1..6) {
-                                delay(300)
-                                if (attempt("png", mode).also { ok = it }) break
+                    if (!ok) {
+                        val w = MpvRuntime.getString("video-params/w")?.toIntOrNull()
+                            ?: MpvRuntime.getString("width")?.toIntOrNull()
+                        val h = MpvRuntime.getString("video-params/h")?.toIntOrNull()
+                            ?: MpvRuntime.getString("height")?.toIntOrNull()
+                        if (w == null || h == null) {
+                            report += "raw capture: video size unknown (width=$w, height=$h)"
+                        } else {
+                            val (bmp, why) = MpvRuntime.grabFrame(maxOf(w, h))
+                            if (bmp == null) {
+                                report += "raw capture: $why"
+                            } else {
+                                val bw = bmp.width
+                                val bh = bmp.height
+                                java.io.FileOutputStream(f).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                                bmp.recycle()
+                                ok = f.length() > 0
+                                if (!ok) report += "raw capture: PNG encoding wrote nothing"
+                                if (bw != w && bh != h) note = " (scaled to ${bw}x$bh, video is ${w}x$h)"
+                                else if (withSubs) note = " (without subtitles)"
                             }
-                        } finally {
-                            MpvRuntime.setString("hwdec", userHwdec)
                         }
                     }
-                    if (!ok) ok = attempt("jpg", mode)
-
-                    val f = shot
-                    if (ok && f != null) {
+                    if (ok) {
                         Screenshots.save(this@PlayerActivity, f, title.ifBlank { "video" }, pos)
                             ?: run { report += "gallery: couldn't write the file"; null }
                     } else null
@@ -672,19 +662,14 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     report += "error: ${e.message ?: e.javaClass.simpleName}"
                     null
                 } finally {
-                    MpvRuntime.setString("screenshot-format", "png")
-                    made.forEach { it.delete() }
+                    f.delete()
                 }
             }
             if (released) return@launch
             if (where != null) {
-                toast(if (where.endsWith(".jpg")) "Saved to $where (JPEG: PNG isn't available)" else "Saved to $where")
+                toast("Saved to $where$note")
             } else {
-                val info = withContext(Dispatchers.IO) {
-                    listOf("vid", "video-format", "hwdec", "hwdec-current", "current-vo", "vo-configured")
-                        .joinToString("\n") { "$it = ${MpvRuntime.getString(it)}" }
-                }
-                val text = report.joinToString("\n") + "\n\n" + info
+                val text = report.joinToString("\n")
                 Log.w("Screenshot", "screenshot failed:\n$text")
                 MaterialAlertDialogBuilder(this@PlayerActivity)
                     .setTitle("Couldn't capture this frame")
@@ -815,3 +800,6 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
     }
 }
+
+// Set once mpv's own file writer has failed (this libmpv build has no image encoder), so later shots skip straight to the raw capture.
+@Volatile private var mpvWriterUnavailable = false

@@ -1,6 +1,7 @@
 package com.noapmat.tstream.player
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
 import java.util.concurrent.Callable
@@ -128,6 +129,27 @@ object MpvRuntime {
         } catch (e: Throwable) {
             e.message ?: e.javaClass.simpleName
         }
+
+    /**
+     * Grabs the current frame as a Bitmap through the library's own raw-screenshot bridge (mpv's "screenshot-raw"),
+     * which needs no image encoder. [maxSide] is the longer edge of the result: pass the video's own size for 1:1.
+     * Returns the bitmap, or null plus the reason.
+     */
+    fun grabFrame(maxSide: Int): Pair<Bitmap?, String> {
+        if (!alive) return null to "mpv not available"
+        return try {
+            val m = mpv ?: return null to "mpv not available"
+            val fn = m.javaClass.methods.firstOrNull { it.name == "grabThumbnail" && it.parameterTypes.size == 1 }
+                ?: return null to "this libmpv has no frame-grab method (it has: " +
+                    m.javaClass.methods.map { it.name }.distinct().sorted().joinToString() + ")"
+            val bmp = guarded { fn.invoke(it, maxSide) } as? Bitmap
+            if (bmp != null) bmp to "" else null to "frame grab returned nothing"
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            null to (e.targetException?.message ?: e.targetException?.javaClass?.simpleName ?: "frame grab failed")
+        } catch (e: Throwable) {
+            null to (e.message ?: e.javaClass.simpleName)
+        }
+    }
 
     fun setString(name: String, value: String) { guarded { it.setPropertyString(name, value) } }
     fun setBool(name: String, value: Boolean) { guarded { it.setPropertyBoolean(name, value) } }
