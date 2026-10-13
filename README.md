@@ -14,7 +14,7 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
 - Player engine: libVLC. Software decoders cover formats the phone's chip can't decode (e.g. 10-bit HEVC), and libass
   renders ASS/SSA with the release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings. Hardware decoding, fast software decoding and the audio output are switchable in Settings.
 - Player: double-tap left/right = -/+10 s (middle = play/pause), vertical swipe on the left half = volume,
-  hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream), subtitle picker
+  hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream, saved at the video's own resolution, capped at 4096 px; the visible subtitle is drawn onto it only if "Subtitles in screenshots" is on in Settings), subtitle picker
   (SRT / ASS / SSA / VTT files from the torrent, plus tracks embedded in the video), audio track picker, speed picker, resume position per exact title.
 - Resuming skips the beginning of the file: the byte position is saved with the time, so the download window starts
   there (only the container header/index pieces are fetched from the start).

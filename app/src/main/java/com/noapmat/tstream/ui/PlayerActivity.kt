@@ -2,6 +2,7 @@ package com.noapmat.tstream.ui
 
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -43,6 +44,10 @@ import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IMedia
+import kotlin.math.roundToInt
+
+/** Longest side of a saved screenshot, so a 4K+ video can't run the phone out of memory. */
+private const val MAX_SHOT_EDGE = 4096f
 
 /**
  * Plays the torrent through libVLC: software decoders when the phone's chip can't decode a format
@@ -478,34 +483,100 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---- screenshot ----------------------------------------------------------------------------------------
 
-    private fun findVideoSurface(v: View): SurfaceView? {
-        if (v is SurfaceView) {
-            // VLCVideoLayout has two surfaces: the video and the subtitles overlay
-            val name = if (v.id != View.NO_ID) try { resources.getResourceEntryName(v.id) } catch (e: Exception) { "" } else ""
-            if (name == "surface_video") return v
-        }
-        if (v is ViewGroup) for (i in 0 until v.childCount) findVideoSurface(v.getChildAt(i))?.let { return it }
-        return null
+    private fun allSurfaces(v: View, out: MutableList<SurfaceView> = ArrayList()): List<SurfaceView> {
+        if (v is SurfaceView) out += v
+        if (v is ViewGroup) for (i in 0 until v.childCount) allSurfaces(v.getChildAt(i), out)
+        return out
     }
 
-    private fun firstSurface(v: View): SurfaceView? {
-        if (v is SurfaceView) return v
-        if (v is ViewGroup) for (i in 0 until v.childCount) firstSurface(v.getChildAt(i))?.let { return it }
-        return null
+    private fun surfaceName(v: View): String =
+        if (v.id != View.NO_ID) try { resources.getResourceEntryName(v.id) } catch (e: Exception) { "" } else ""
+
+    // VLCVideoLayout has two surfaces: the video and the subtitles overlay (the video one comes first). The names
+    // are tried first; the order is the fallback in case resource names were shortened by the build.
+    private fun findVideoSurface(): SurfaceView? {
+        val all = allSurfaces(b.videoLayout)
+        return all.firstOrNull { surfaceName(it) == "surface_video" } ?: all.firstOrNull()
     }
 
+    private fun findSubtitleSurface(video: SurfaceView): SurfaceView? {
+        val others = allSurfaces(b.videoLayout).filter { it !== video }
+        return others.firstOrNull { surfaceName(it) == "surface_subtitles" } ?: others.firstOrNull()
+    }
+
+    /** Size of the picture as the video really is (pixel aspect ratio and rotation applied), capped at [MAX_SHOT_EDGE]. */
+    private fun nativeFrameSize(m: MediaPlayer, fallback: SurfaceView): Pair<Int, Int> {
+        val t = m.getCurrentVideoTrack()
+        if (t == null || t.width <= 0 || t.height <= 0) return fallback.width to fallback.height
+        var w = t.width.toFloat() * (if (t.sarNum > 0 && t.sarDen > 0) t.sarNum.toFloat() / t.sarDen else 1f)
+        var h = t.height.toFloat()
+        if (t.orientation >= 4) { val x = w; w = h; h = x } // libvlc orientations 4..7 are rotated by 90 degrees
+        val k = minOf(1f, MAX_SHOT_EDGE / maxOf(w, h))
+        return maxOf(1, (w * k).roundToInt()) to maxOf(1, (h * k).roundToInt())
+    }
+
+    /**
+     * Saves the current frame at the video's own resolution. PixelCopy reads the surface's buffer (not the screen)
+     * and scales it to the bitmap it is given, so a bitmap of the video's size gives the video's resolution
+     * instead of the smaller size the picture has on screen. With "Subtitles in screenshots" on, the subtitle
+     * overlay is copied the same way and drawn on top.
+     */
     private fun takeScreenshot() {
         val m = mp ?: return
         val pos = m.getTime()
-        val sv = findVideoSurface(b.videoLayout) ?: firstSurface(b.videoLayout)
-        if (sv == null || sv.width <= 0 || sv.height <= 0) { toast("Nothing to capture yet"); return }
-        val bmp = Bitmap.createBitmap(sv.width, sv.height, Bitmap.Config.ARGB_8888)
+        val video = findVideoSurface()
+        if (video == null || video.width <= 0 || video.height <= 0) { toast("Nothing to capture yet"); return }
+        val (w, h) = nativeFrameSize(m, video)
+        val subs = if ((application as App).settings.screenshotSubtitles) findSubtitleSurface(video) else null
+        val main = Handler(Looper.getMainLooper())
+        val frame = try {
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            toast("Not enough memory for a full-size screenshot"); return
+        }
         PixelCopy.request(
-            sv, bmp,
+            video, frame,
             PixelCopy.OnPixelCopyFinishedListener { result ->
-                if (result == PixelCopy.SUCCESS) saveShot(bmp, pos) else toast("Couldn't capture this frame")
+                if (result != PixelCopy.SUCCESS) {
+                    toast("Couldn't capture this frame")
+                } else if (subs == null || subs.width <= 0 || subs.height <= 0) {
+                    saveShot(frame, pos)
+                } else {
+                    copySubtitles(video, subs, frame, main) { saveShot(frame, pos) }
+                }
             },
-            Handler(Looper.getMainLooper()),
+            main,
+        )
+    }
+
+    /** Draws the subtitle overlay onto [frame] (same scale as the video), then calls [done]; a failure just skips it. */
+    private fun copySubtitles(video: SurfaceView, subs: SurfaceView, frame: Bitmap, main: Handler, done: () -> Unit) {
+        val sx = frame.width.toFloat() / video.width
+        val sy = frame.height.toFloat() / video.height
+        val overlay = try {
+            Bitmap.createBitmap(
+                (subs.width * sx).roundToInt().coerceAtLeast(1),
+                (subs.height * sy).roundToInt().coerceAtLeast(1),
+                Bitmap.Config.ARGB_8888,
+            )
+        } catch (e: OutOfMemoryError) {
+            done(); return
+        }
+        PixelCopy.request(
+            subs, overlay,
+            PixelCopy.OnPixelCopyFinishedListener { result ->
+                if (result == PixelCopy.SUCCESS) {
+                    // the overlay normally covers exactly the video; the offset keeps it right if it is larger
+                    val v = IntArray(2)
+                    val s = IntArray(2)
+                    video.getLocationOnScreen(v)
+                    subs.getLocationOnScreen(s)
+                    Canvas(frame).drawBitmap(overlay, (s[0] - v[0]) * sx, (s[1] - v[1]) * sy, null)
+                }
+                overlay.recycle()
+                done()
+            },
+            main,
         )
     }
 

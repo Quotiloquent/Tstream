@@ -14,6 +14,7 @@ data class AppSettings(
     val fastDecode: Boolean = false,         // skip some in-loop filtering in software decoding: smoother, slightly blockier
     val hardwareDecoding: Boolean = true,    // try the phone's chip first; off = always decode on the CPU
     val audioOutput: Int = 0,                // 0 automatic, 1 AudioTrack, 2 OpenSL ES
+    val screenshotSubtitles: Boolean = false, // draw the visible subtitles onto screenshots
     val cacheDir: String = "",               // folder picked by the user, "" = app-private default
     val maxConnections: Int = 100,
     val downloadLimitBps: Int = 0,
@@ -65,6 +66,7 @@ data class AppSettings(
                 fastDecode = p.getBoolean("fastDecode", false),
                 hardwareDecoding = p.getBoolean("hardwareDecoding", true),
                 audioOutput = p.getInt("audioOutput", 0).coerceIn(0, 2),
+                screenshotSubtitles = p.getBoolean("screenshotSubtitles", false),
                 cacheDir = p.getString("cacheDir", "") ?: "",
             )
         }
@@ -81,6 +83,7 @@ data class AppSettings(
                 .putBoolean("fastDecode", s.fastDecode)
                 .putBoolean("hardwareDecoding", s.hardwareDecoding)
                 .putInt("audioOutput", s.audioOutput)
+                .putBoolean("screenshotSubtitles", s.screenshotSubtitles)
                 .putInt("version", 2)
                 .putString("cacheDir", s.cacheDir)
                 .apply()

@@ -93,6 +93,9 @@ class SettingsActivity : AppCompatActivity() {
         b.switchFast.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(fastDecode = on) }
         }
+        b.switchShotSubs.setOnCheckedChangeListener { _, on ->
+            if (!binding) AppSettings.update(this) { it.copy(screenshotSubtitles = on) }
+        }
         b.switchRemember.setOnCheckedChangeListener { _, on ->
             if (!binding) AppSettings.update(this) { it.copy(rememberPosition = on) }
         }
@@ -134,6 +137,7 @@ class SettingsActivity : AppCompatActivity() {
         b.subSizeGroup.check(when (s.subtitleSize) { 0 -> b.btnSubSmall.id; 2 -> b.btnSubLarge.id; else -> b.btnSubMedium.id })
         b.switchFast.isChecked = s.fastDecode
         b.switchHw.isChecked = s.hardwareDecoding
+        b.switchShotSubs.isChecked = s.screenshotSubtitles
         b.aoutGroup.check(when (s.audioOutput) { 1 -> b.btnAoutTrack.id; 2 -> b.btnAoutSles.id; else -> b.btnAoutAuto.id })
         binding = false
         b.aheadLayout.isEnabled = s.smartCache
