@@ -123,7 +123,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
             fastForwarding = true
             speedBeforeHold = curSpeed
             MpvRuntime.setDouble("speed", 2.0)
-            MpvRuntime.setBool("mute", true) // sped-up audio is just noise, and muting skips the time-stretching work
+            // MpvRuntime.setBool("mute", true) // sped-up audio is just noise, and muting skips the time-stretching work
             showHud("2x 》", persistent = true)
         }
 
@@ -131,7 +131,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
             if (!fastForwarding) return
             fastForwarding = false
             MpvRuntime.setDouble("speed", speedBeforeHold)
-            MpvRuntime.setBool("mute", false)
+            // MpvRuntime.setBool("mute", false)
             ui.removeCallbacks(hideHud)
             b.hud.visibility = View.GONE
         }
