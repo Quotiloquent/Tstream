@@ -19,12 +19,14 @@ object Screenshots {
         val s = positionMs / 1000
         val clock = "%02d-%02d-%02d".format(s / 3600, s / 60 % 60, s % 60)
         val base = title.substringAfterLast('/').substringBeforeLast('.').replace(Regex("[^A-Za-z0-9._-]+"), "_").take(60)
-        val name = "Tstream_${base}_${clock}_$stamp.png"
+        val ext = if (png.extension.equals("jpg", true)) "jpg" else "png"
+        val mime = if (ext == "jpg") "image/jpeg" else "image/png"
+        val name = "Tstream_${base}_${clock}_$stamp.$ext"
         return try {
             if (Build.VERSION.SDK_INT >= 29) {
                 val cv = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.MIME_TYPE, mime)
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Tstream")
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
