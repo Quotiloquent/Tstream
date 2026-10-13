@@ -72,6 +72,8 @@ class PlayerActivity : AppCompatActivity() {
     private var playing = false
     private var ended = false
     private var released = false
+    private var videoAttached = false   // libVLC is drawing into the layout's surfaces (they are gone while stopped)
+    private var vlcFailed = false       // VLC reported an error or stopped by itself: this player cannot be revived
     private var engineClosed = false
     private var orientationChosen = false
     private var controlsVisible = true
@@ -216,6 +218,7 @@ class PlayerActivity : AppCompatActivity() {
                 2 -> m.setAudioOutput("opensles")
             }
             m.attachViews(b.videoLayout, null, true, false)
+            videoAttached = true
             m.setEventListener(object : MediaPlayer.EventListener {
                 override fun onEvent(event: MediaPlayer.Event) {
                     val type = event.type
@@ -322,7 +325,7 @@ class PlayerActivity : AppCompatActivity() {
             MediaPlayer.Event.Buffering -> bufferPct = buffering
             MediaPlayer.Event.Playing -> { playing = true; bufferPct = 100f; updatePlayIcon(); chooseOrientation(); scheduleAutoHide() }
             MediaPlayer.Event.Paused -> { playing = false; updatePlayIcon() }
-            MediaPlayer.Event.Stopped -> { playing = false; updatePlayIcon() }
+            MediaPlayer.Event.Stopped -> { playing = false; updatePlayIcon(); if (!ended && !released) vlcFailed = true }
             MediaPlayer.Event.EndReached -> {
                 ended = true
                 playing = false
@@ -330,7 +333,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (title.isNotBlank()) PositionStore.remove(this, title)
                 setControlsVisible(true)
             }
-            MediaPlayer.Event.EncounteredError -> error = "VLC could not play this file."
+            MediaPlayer.Event.EncounteredError -> { error = "VLC could not play this file."; vlcFailed = true }
             MediaPlayer.Event.Vout, MediaPlayer.Event.ESAdded -> chooseOrientation()
         }
     }
@@ -695,9 +698,41 @@ class PlayerActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Back from Home / another app. Android destroys the video surfaces while the screen is stopped, and libVLC
+     * keeps drawing into the dead ones: the picture stays black, and play/pause or a seek do nothing visible.
+     * So the views are detached in [onStop] and attached again here (libVLC's own sample does the same). If VLC
+     * died while we were away (its connection to the local stream server broke, ...), the player can't be
+     * revived: restart it the way opening the file again does, from the saved position.
+     */
+    override fun onStart() {
+        super.onStart()
+        val m = mp ?: return
+        if (released) return
+        if (vlcFailed && !ended) { recreate(); return } // onStop saved the position; onCreate reopens the torrent there
+        if (!videoAttached) {
+            try {
+                m.attachViews(b.videoLayout, null, true, false)
+                videoAttached = true
+            } catch (e: Exception) {
+                recreate(); return
+            }
+            // paused with a fresh video output shows nothing until the next frame: a seek to the same spot draws it
+            val t = m.getTime()
+            if (t >= 0 && !m.isPlaying) m.setTime(t)
+        }
+    }
+
     override fun onStop() {
         super.onStop()
-        if (!released) { mp?.pause(); savePosition() }
+        if (released) return
+        val m = mp ?: return
+        m.pause()
+        savePosition()
+        if (videoAttached) {
+            videoAttached = false
+            try { m.detachViews() } catch (e: Exception) { /* already detached */ }
+        }
     }
 
     /**

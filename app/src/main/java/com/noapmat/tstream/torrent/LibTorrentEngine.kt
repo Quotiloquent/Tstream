@@ -469,6 +469,8 @@ internal class LtFileStream(
     @Volatile private var checking = false
     @Volatile private var needsReinit = false
     private var checkDeadline = 0L
+    /** Piece the player is reading now (or last read): where the window is rebuilt after a recheck. */
+    @Volatile private var readPiece = -1
 
     init {
         initPriorities(startPiece)
@@ -683,8 +685,18 @@ internal class LtFileStream(
     }
 
     fun onChecked() {
-        synchronized(this) {
-            if (checking) { checking = false; needsReinit = true }
+        val rebuild = synchronized(this) {
+            if (checking) { checking = false; needsReinit = true; true } else false
+        }
+        // The recheck made libtorrent forget the window (every piece of the file is wanted again). Put it back right
+        // away: waiting for a read to do it left the whole file downloading whenever the player was not reading at
+        // that moment (stalled, dead, or its request was replaced by a newer one).
+        if (rebuild && !closed) {
+            try {
+                synchronized(this) { if (needsReinit) reinit(if (readPiece >= 0) readPiece else startPiece) }
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "could not rebuild the download window after the recheck: ${e.message}")
+            }
         }
         signal()
     }
@@ -736,6 +748,7 @@ internal class LtFileStream(
     private fun doAwait(position: Long, length: Int): Int {
         val global = base + position
         val first = PieceMath.pieceOf(global, pieceLen).coerceIn(firstPiece, lastPiece)
+        readPiece = first
         val waitStart = System.currentTimeMillis()
         try {
             if (!isEvicted(first)) refresh(first)
