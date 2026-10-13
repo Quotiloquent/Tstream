@@ -32,6 +32,7 @@ import com.noapmat.tstream.streaming.StreamServer
 import com.noapmat.tstream.torrent.FileStream
 import com.noapmat.tstream.torrent.Fmt
 import com.noapmat.tstream.torrent.OrientationPicker
+import com.noapmat.tstream.torrent.PictureBox
 import com.noapmat.tstream.torrent.TorrentFileMeta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -515,10 +516,21 @@ class PlayerActivity : AppCompatActivity() {
         return maxOf(1, (w * k).roundToInt()) to maxOf(1, (h * k).roundToInt())
     }
 
+    /** Aspect ratio (w/h) the picture is shown with (pixel aspect and rotation applied), or 0 when not known yet. */
+    private fun displayAspect(m: MediaPlayer): Float {
+        val t = m.getCurrentVideoTrack() ?: return 0f
+        if (t.width <= 0 || t.height <= 0) return 0f
+        var r = t.width.toFloat() * (if (t.sarNum > 0 && t.sarDen > 0) t.sarNum.toFloat() / t.sarDen else 1f) / t.height
+        if (t.orientation >= 4) r = 1f / r
+        return r
+    }
+
     /**
      * Saves the current frame at the video's own resolution. PixelCopy reads the surface's buffer (not the screen)
      * and scales it to the bitmap it is given, so a bitmap of the video's size gives the video's resolution
-     * instead of the smaller size the picture has on screen. With "Subtitles in screenshots" on, the subtitle
+     * instead of the smaller size the picture has on screen. The surface can be larger than the picture (libVLC
+     * draws the black bars into it), so the copy is cut down to the picture's box first; otherwise the bars would
+     * be squeezed into the frame together with the picture. With "Subtitles in screenshots" on, the subtitle
      * overlay is copied the same way and drawn on top.
      */
     private fun takeScreenshot() {
@@ -527,32 +539,75 @@ class PlayerActivity : AppCompatActivity() {
         val video = findVideoSurface()
         if (video == null || video.width <= 0 || video.height <= 0) { toast("Nothing to capture yet"); return }
         val (w, h) = nativeFrameSize(m, video)
+        val box = PictureBox.fit(video.width, video.height, displayAspect(m))
         val subs = if ((application as App).settings.screenshotSubtitles) findSubtitleSurface(video) else null
         val main = Handler(Looper.getMainLooper())
-        val frame = try {
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val withSubtitles = { frame: Bitmap ->
+            if (subs == null || subs.width <= 0 || subs.height <= 0) saveShot(frame, pos)
+            else copySubtitles(video, subs, frame, box, main) { saveShot(frame, pos) }
+        }
+        val barsInSurface = box.width != video.width || box.height != video.height
+        if (!barsInSurface) {
+            val frame = try {
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) {
+                toast("Not enough memory for a full-size screenshot"); return
+            }
+            PixelCopy.request(
+                video, frame,
+                PixelCopy.OnPixelCopyFinishedListener { result ->
+                    if (result == PixelCopy.SUCCESS) withSubtitles(frame) else toast("Couldn't capture this frame")
+                },
+                main,
+            )
+            return
+        }
+        // Bars inside the surface: copy the whole surface at a scale that gives the picture its native size
+        // (capped a little above MAX_SHOT_EDGE, the bars add to the size), then keep only the picture.
+        var k = w.toFloat() / box.width
+        val cap = MAX_SHOT_EDGE * 1.25f
+        val edge = maxOf(video.width, video.height) * k
+        if (edge > cap) k *= cap / edge
+        val full = try {
+            Bitmap.createBitmap(
+                (video.width * k).roundToInt().coerceAtLeast(1),
+                (video.height * k).roundToInt().coerceAtLeast(1),
+                Bitmap.Config.ARGB_8888,
+            )
         } catch (e: OutOfMemoryError) {
             toast("Not enough memory for a full-size screenshot"); return
         }
         PixelCopy.request(
-            video, frame,
+            video, full,
             PixelCopy.OnPixelCopyFinishedListener { result ->
                 if (result != PixelCopy.SUCCESS) {
+                    full.recycle()
                     toast("Couldn't capture this frame")
-                } else if (subs == null || subs.width <= 0 || subs.height <= 0) {
-                    saveShot(frame, pos)
-                } else {
-                    copySubtitles(video, subs, frame, main) { saveShot(frame, pos) }
+                    return@OnPixelCopyFinishedListener
                 }
+                val x = (box.left * k).roundToInt().coerceIn(0, full.width - 1)
+                val y = (box.top * k).roundToInt().coerceIn(0, full.height - 1)
+                val cw = (box.width * k).roundToInt().coerceIn(1, full.width - x)
+                val ch = (box.height * k).roundToInt().coerceIn(1, full.height - y)
+                val frame = try {
+                    Bitmap.createBitmap(full, x, y, cw, ch)
+                } catch (e: OutOfMemoryError) {
+                    null
+                }
+                full.recycle()
+                if (frame == null) toast("Not enough memory for a full-size screenshot") else withSubtitles(frame)
             },
             main,
         )
     }
 
-    /** Draws the subtitle overlay onto [frame] (same scale as the video), then calls [done]; a failure just skips it. */
-    private fun copySubtitles(video: SurfaceView, subs: SurfaceView, frame: Bitmap, main: Handler, done: () -> Unit) {
-        val sx = frame.width.toFloat() / video.width
-        val sy = frame.height.toFloat() / video.height
+    /**
+     * Draws the subtitle overlay onto [frame], mapped the same way as the picture (the part of the video surface
+     * inside [box] is what [frame] shows), then calls [done]; a failure just skips the subtitles.
+     */
+    private fun copySubtitles(video: SurfaceView, subs: SurfaceView, frame: Bitmap, box: PictureBox.Box, main: Handler, done: () -> Unit) {
+        val sx = frame.width.toFloat() / box.width
+        val sy = frame.height.toFloat() / box.height
         val overlay = try {
             Bitmap.createBitmap(
                 (subs.width * sx).roundToInt().coerceAtLeast(1),
@@ -566,12 +621,12 @@ class PlayerActivity : AppCompatActivity() {
             subs, overlay,
             PixelCopy.OnPixelCopyFinishedListener { result ->
                 if (result == PixelCopy.SUCCESS) {
-                    // the overlay normally covers exactly the video; the offset keeps it right if it is larger
+                    // the overlay normally covers exactly the video surface; the offset keeps it right if it doesn't
                     val v = IntArray(2)
                     val s = IntArray(2)
                     video.getLocationOnScreen(v)
                     subs.getLocationOnScreen(s)
-                    Canvas(frame).drawBitmap(overlay, (s[0] - v[0]) * sx, (s[1] - v[1]) * sy, null)
+                    Canvas(frame).drawBitmap(overlay, (s[0] - v[0] - box.left) * sx, (s[1] - v[1] - box.top) * sy, null)
                 }
                 overlay.recycle()
                 done()
