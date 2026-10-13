@@ -1,10 +1,10 @@
-package com.noapmat.tsream.torrent
+package com.noapmat.tstream.torrent
 
-import com.noapmat.tsream.AppSettings
+import com.noapmat.tstream.AppSettings
 import kotlinx.coroutines.CompletableDeferred
 import android.util.Log
-import com.noapmat.tsream.cache.Cleanup
-import com.noapmat.tsream.cache.HolePuncher
+import com.noapmat.tstream.cache.Cleanup
+import com.noapmat.tstream.cache.HolePuncher
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -641,11 +641,11 @@ internal class LtFileStream(
             try { handle.resume(); handle.forceReannounce() } catch (e: Exception) { /* best effort */ }
         }
         waitText = (if (pi != null) {
-            "piece $piece: ${pi.finished()}/${pi.blocksInPiece()} blocks" +
-                (if (pi.requested() > 0) ", ${pi.requested()} requested" else "") + " (%.1f MB piece)".format(mb)
+            "#$piece: ${pi.finished()}/${pi.blocksInPiece()}" +
+                (if (pi.requested() > 0) " <> ${pi.requested()}" else "") + " (%.1f MB/p)".format(mb)
         } else {
-            "piece $piece queued (%.1f MB piece)".format(mb)
-        }) + (st?.let { "\n${it.state().name.lowercase()}: ${it.numPeers()} connected, ${it.listPeers()} known, ${it.connectCandidates()} to try" } ?: "")
+            "#$piece queued (%.1f MB/p)".format(mb)
+        }) + (st?.let { "\n${it.state().name.lowercase()} • P:${it.numPeers()}, ${it.listPeers()} total, ${it.connectCandidates()} to try" } ?: "")
     }
 
     /**
@@ -663,6 +663,16 @@ internal class LtFileStream(
     override fun estimatedPlayheadBytes(): Long {
         if (lagPieces >= numPieces || lastFirst < 0) return -1L
         return (maxOf(firstPiece, lastFirst - lagPieces) - firstPiece).toLong() * pieceLen
+    }
+
+    /** How far the file is downloaded without gaps from [fromBytes] on (drives the player's buffer indicator). */
+    override fun bufferedUntil(fromBytes: Long): Long {
+        if (closed || size <= 0) return fromBytes
+        val from = fromBytes.coerceIn(0L, size - 1)
+        var p = PieceMath.pieceOf(base + from, pieceLen).coerceIn(firstPiece, lastPiece)
+        while (p <= lastPiece && have(p)) p++ // have() checks the local bitmap first, so this is cheap
+        val end = minOf(size, p.toLong() * pieceLen - base)
+        return maxOf(end, from)
     }
 
     // ---- events from the alert thread ----------------------------------------------------------

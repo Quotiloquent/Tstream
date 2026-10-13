@@ -28,7 +28,13 @@ Paste a magnet link (or open a .torrent), pick a video, it plays while it downlo
 - Google Sans (OFL) bundled; Material You colours on Android 12+.
 
 ## Build
-GitHub Actions (`.github/workflows/android.yml`) installs NDK 26.1 + CMake 3.22.1, runs unit tests and builds the debug APK.
-Local: `gradle assembleDebug` (Gradle 8.9, JDK 17).
+GitHub Actions (`.github/workflows/android.yml`) installs NDK 26.1 + CMake 3.22.1, runs unit tests and builds the release APKs.
+Local: `gradle assembleRelease` (Gradle 8.9, JDK 17). Output in `app/build/outputs/apk/release/`:
+- `app-arm64-v8a-release.apk`: 64-bit ARM, almost every phone made since ~2017. Pick this one if unsure.
+- `app-armeabi-v7a-release.apk`: 32-bit ARM, older phones.
+- `app-universal-release.apk`: both ABIs in one file (larger).
+
+The release build uses R8 + resource shrinking and is signed with the debug key so it installs directly.
+x86 / x86_64 are not built (they need the matching `libtorrent4j-android-x86*` dependencies plus an `include(...)` entry in `splits`).
 
 Fonts: Google Sans, SIL Open Font License (see `app/src/main/assets/OFL-GoogleSans.txt`).

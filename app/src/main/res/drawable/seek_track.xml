@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Seek bar track: dim = whole video, light = downloaded ahead of the playhead (secondaryProgress), accent = played. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@android:id/background">
+        <shape android:shape="rectangle">
+            <solid android:color="#33FFFFFF" />
+            <corners android:radius="2dp" />
+            <size android:height="4dp" />
+        </shape>
+    </item>
+    <item android:id="@android:id/secondaryProgress">
+        <clip>
+            <shape android:shape="rectangle">
+                <solid android:color="#80FFFFFF" />
+                <corners android:radius="2dp" />
+                <size android:height="4dp" />
+            </shape>
+        </clip>
+    </item>
+    <item android:id="@android:id/progress">
+        <clip>
+            <shape android:shape="rectangle">
+                <solid android:color="?attr/colorPrimary" />
+                <corners android:radius="2dp" />
+                <size android:height="4dp" />
+            </shape>
+        </clip>
+    </item>
+</layer-list>

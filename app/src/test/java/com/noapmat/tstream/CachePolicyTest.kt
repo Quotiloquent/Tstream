@@ -1,7 +1,7 @@
-package com.noapmat.tsream
+package com.noapmat.tstream
 
-import com.noapmat.tsream.torrent.CachePolicy
-import com.noapmat.tsream.torrent.MediaTypes
+import com.noapmat.tstream.torrent.CachePolicy
+import com.noapmat.tstream.torrent.MediaTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

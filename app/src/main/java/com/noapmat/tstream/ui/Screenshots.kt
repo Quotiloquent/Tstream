@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.content.ContentValues
 import android.content.Context

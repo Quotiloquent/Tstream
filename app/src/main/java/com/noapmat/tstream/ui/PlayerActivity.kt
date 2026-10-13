@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
@@ -22,16 +22,16 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.noapmat.tsream.App
-import com.noapmat.tsream.AppSettings
-import com.noapmat.tsream.R
-import com.noapmat.tsream.cache.PositionStore
-import com.noapmat.tsream.databinding.ActivityPlayerBinding
-import com.noapmat.tsream.streaming.StreamServer
-import com.noapmat.tsream.torrent.FileStream
-import com.noapmat.tsream.torrent.Fmt
-import com.noapmat.tsream.torrent.OrientationPicker
-import com.noapmat.tsream.torrent.TorrentFileMeta
+import com.noapmat.tstream.App
+import com.noapmat.tstream.AppSettings
+import com.noapmat.tstream.R
+import com.noapmat.tstream.cache.PositionStore
+import com.noapmat.tstream.databinding.ActivityPlayerBinding
+import com.noapmat.tstream.streaming.StreamServer
+import com.noapmat.tstream.torrent.FileStream
+import com.noapmat.tstream.torrent.Fmt
+import com.noapmat.tstream.torrent.OrientationPicker
+import com.noapmat.tstream.torrent.TorrentFileMeta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,6 +62,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private var error: String? = null
     private var bufferPct = 0f
+    private var aheadMs = 0L // how much video beyond the playhead is already downloaded
     private var playing = false
     private var ended = false
     private var released = false
@@ -93,8 +94,8 @@ class PlayerActivity : AppCompatActivity() {
         override fun onDoubleTap(zone: PlayerGestures.Zone) {
             if (locked) return
             when (zone) {
-                PlayerGestures.Zone.LEFT -> { seekBy(-10_000); flash(b.seekLeft, hideLeft, "\u221210 s") }
-                PlayerGestures.Zone.RIGHT -> { seekBy(10_000); flash(b.seekRight, hideRight, "+10 s") }
+                PlayerGestures.Zone.LEFT -> { seekBy(-10_000); flash(b.seekLeft, hideLeft, "\u221210 seconds") }
+                PlayerGestures.Zone.RIGHT -> { seekBy(10_000); flash(b.seekRight, hideRight, "+10 seconds") }
                 PlayerGestures.Zone.CENTER -> togglePlay()
             }
         }
@@ -111,7 +112,7 @@ class PlayerActivity : AppCompatActivity() {
             volumeBeforeHold = m.getVolume()
             m.setRate(2f)
             m.setVolume(0) // no time-stretching at 2x: saves CPU, and sped-up audio is just noise anyway
-            showHud("2\u00D7 speed", persistent = true)
+            showHud("2x 》", persistent = true)
         }
 
         override fun onHoldEnd() {
@@ -172,9 +173,9 @@ class PlayerActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             // Leaving the player closed the torrent (no background download, cache wiped): open it again now.
             if (!app.engine.isOpen) {
-                if (source == null) { b.info.text = "Error: the torrent is not loaded - go back and open it again"; return@launch }
+                if (source == null) { b.info.text = "Error: The torrent is not loaded. Go back and open it again"; return@launch }
                 b.info.visibility = View.VISIBLE
-                b.info.text = "Fetching torrent metadata (DHT / trackers)…"
+                b.info.text = "Initializing..."
                 try {
                     app.engine.open(source)
                 } catch (e: CancellationException) {
@@ -239,6 +240,13 @@ class PlayerActivity : AppCompatActivity() {
                     b.seek.progress = t.coerceIn(0L, len).toInt()
                     b.tvPos.text = clock(t)
                     b.tvDur.text = clock(len)
+                    if (stream.size > 0) {
+                        // bytes -> time with the file's average bitrate (approximate for VBR video)
+                        val fromBytes = (t.coerceIn(0L, len).toDouble() / len * stream.size).toLong()
+                        val endMs = (stream.bufferedUntil(fromBytes).toDouble() / stream.size * len).toLong()
+                        b.seek.secondaryProgress = endMs.coerceIn(t.coerceAtLeast(0L), len).toInt()
+                        aheadMs = (endMs - t).coerceAtLeast(0L)
+                    }
                 }
                 if (tick % 2 == 0) {
                     stream.updatePlayback(t, t + 12_000, if (len > 0) len else -1L)
@@ -248,13 +256,14 @@ class PlayerActivity : AppCompatActivity() {
                     b.info.text = buildString {
                         error?.let { appendLine(it) }
                         if (buffering) {
-                            appendLine("BUFFERING ${bufferPct.toInt()}% - waiting for torrent pieces...")
+                            appendLine("${bufferPct.toInt()}% • waiting for torrent pieces...")
                             stream.waitInfo?.let { appendLine(it) }
                             if (st.peers == 0) appendLine("No peers available yet.")
                         }
+                        if (aheadMs > 0) appendLine("Buffered ${clock(aheadMs)} ahead")
                         append("\u2193 ${Fmt.rate(st.downBps)}  ")
                         if (seeding) append("\u2191 ${Fmt.rate(st.upBps)}  ") // upload only shown while seeding is on
-                        append("Peers ${st.peers} (seeds ${st.seeds})")
+                        append("[P:${st.peers} | S:${st.seeds}]")
                     }
                 }
                 if (++tick % 20 == 0) savePosition()

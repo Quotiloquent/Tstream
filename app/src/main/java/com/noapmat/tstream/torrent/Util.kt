@@ -1,4 +1,4 @@
-package com.noapmat.tsream.torrent
+package com.noapmat.tstream.torrent
 
 import java.io.File
 

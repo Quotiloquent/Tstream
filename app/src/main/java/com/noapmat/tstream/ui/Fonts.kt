@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.content.Context
 import android.graphics.Typeface
@@ -7,7 +7,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.content.res.ResourcesCompat
-import com.noapmat.tsream.R
+import com.noapmat.tstream.R
 
 /**
  * Google Sans (bundled, OFL) for every TextView. The theme already sets it, but Material components

@@ -1,12 +1,12 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
-import com.noapmat.tsream.R
-import com.noapmat.tsream.databinding.ItemFileBinding
-import com.noapmat.tsream.torrent.Fmt
-import com.noapmat.tsream.torrent.TorrentFileMeta
+import com.noapmat.tstream.R
+import com.noapmat.tstream.databinding.ItemFileBinding
+import com.noapmat.tstream.torrent.Fmt
+import com.noapmat.tstream.torrent.TorrentFileMeta
 
 class FileAdapter(private val onClick: (TorrentFileMeta) -> Unit) : RecyclerView.Adapter<FileAdapter.VH>() {
     private var items: List<TorrentFileMeta> = emptyList()

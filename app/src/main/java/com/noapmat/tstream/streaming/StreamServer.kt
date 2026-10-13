@@ -1,7 +1,7 @@
-package com.noapmat.tsream.streaming
+package com.noapmat.tstream.streaming
 
-import com.noapmat.tsream.torrent.FileStream
-import com.noapmat.tsream.torrent.HttpRange
+import com.noapmat.tstream.torrent.FileStream
+import com.noapmat.tstream.torrent.HttpRange
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.InetAddress

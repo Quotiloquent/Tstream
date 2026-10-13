@@ -1,4 +1,4 @@
-package com.noapmat.tsream.torrent
+package com.noapmat.tstream.torrent
 
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -39,6 +39,9 @@ interface FileStream {
 
     /** Estimated byte offset of the playhead (for resuming later), or -1 when not known yet. */
     fun estimatedPlayheadBytes(): Long = -1L
+
+    /** Byte offset (exclusive) up to which the file is on disk without gaps, starting at [fromBytes]. */
+    fun bufferedUntil(fromBytes: Long): Long = fromBytes
 
     /** Tells the stream where the playhead is so "keep behind" is measured from what you watch, not what is buffered. */
     fun updatePlayback(positionMs: Long, bufferedMs: Long, durationMs: Long) {}

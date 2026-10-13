@@ -1,4 +1,4 @@
-package com.noapmat.tsream
+package com.noapmat.tstream
 
 import android.app.Activity
 import android.app.Application
@@ -6,10 +6,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import com.google.android.material.color.DynamicColors
-import com.noapmat.tsream.cache.PositionStore
-import com.noapmat.tsream.cache.StaleCache
-import com.noapmat.tsream.torrent.LibTorrentEngine
-import com.noapmat.tsream.torrent.TorrentEngine
+import com.noapmat.tstream.cache.PositionStore
+import com.noapmat.tstream.cache.StaleCache
+import com.noapmat.tstream.torrent.LibTorrentEngine
+import com.noapmat.tstream.torrent.TorrentEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred

@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.Manifest
 import android.content.Intent
@@ -15,12 +15,12 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.noapmat.tsream.AppSettings
-import com.noapmat.tsream.cache.CacheProbe
-import com.noapmat.tsream.cache.Cleanup
-import com.noapmat.tsream.cache.PositionStore
-import com.noapmat.tsream.cache.TreeUriPaths
-import com.noapmat.tsream.databinding.ActivitySettingsBinding
+import com.noapmat.tstream.AppSettings
+import com.noapmat.tstream.cache.CacheProbe
+import com.noapmat.tstream.cache.Cleanup
+import com.noapmat.tstream.cache.PositionStore
+import com.noapmat.tstream.cache.TreeUriPaths
+import com.noapmat.tstream.databinding.ActivitySettingsBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

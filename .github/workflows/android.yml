@@ -24,10 +24,11 @@ jobs:
       - name: Install NDK + CMake (native hole-punch helper)
         run: printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.1.10909125" "cmake;3.22.1"
 
-      - name: Unit tests + debug APK
-        run: gradle testDebugUnitTest assembleDebug --no-daemon --console=plain
+      # Release build: R8 + resource shrinking, one APK per ABI plus a universal one (see `splits` in app/build.gradle.kts)
+      - name: Unit tests + release APKs
+        run: gradle testDebugUnitTest assembleRelease --no-daemon --console=plain
 
       - uses: actions/upload-artifact@v5
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: tstream-apks
+          path: app/build/outputs/apk/release/*.apk

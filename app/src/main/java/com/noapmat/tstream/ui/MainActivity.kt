@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.app.ActivityManager
 import android.content.ClipboardManager
@@ -13,9 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
-import com.noapmat.tsream.App
-import com.noapmat.tsream.cache.ExitCleanupService
-import com.noapmat.tsream.databinding.ActivityMainBinding
+import com.noapmat.tstream.App
+import com.noapmat.tstream.cache.ExitCleanupService
+import com.noapmat.tstream.databinding.ActivityMainBinding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (loaded && job?.isActive != true && !engine.isOpen) {
-            b.status.text = "$torrentName\nStopped, cache cleared. Tap a video to stream it again."
+            b.status.text = "$torrentName"
         }
     }
 

@@ -1,4 +1,4 @@
-package com.noapmat.tsream.cache
+package com.noapmat.tstream.cache
 
 import android.content.Context
 import android.net.Uri
@@ -6,7 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
-import com.noapmat.tsream.torrent.StoragePaths
+import com.noapmat.tstream.torrent.StoragePaths
 import java.io.File
 
 /** Turns the folder the user picked in the system picker (a SAF tree Uri) into a regular file path. */

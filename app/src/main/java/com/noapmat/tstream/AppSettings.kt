@@ -1,4 +1,4 @@
-package com.noapmat.tsream
+package com.noapmat.tstream
 
 import android.content.Context
 import java.io.File

@@ -1,7 +1,7 @@
-package com.noapmat.tsream.cache
+package com.noapmat.tstream.cache
 
 import android.content.Context
-import com.noapmat.tsream.AppSettings
+import com.noapmat.tstream.AppSettings
 import java.io.File
 
 /**

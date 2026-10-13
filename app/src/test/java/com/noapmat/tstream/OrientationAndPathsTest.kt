@@ -1,10 +1,10 @@
-package com.noapmat.tsream
+package com.noapmat.tstream
 
-import com.noapmat.tsream.torrent.HttpRange
-import com.noapmat.tsream.torrent.OrientationPicker
-import com.noapmat.tsream.torrent.OrientationPicker.Choice.LANDSCAPE
-import com.noapmat.tsream.torrent.OrientationPicker.Choice.PORTRAIT
-import com.noapmat.tsream.torrent.StoragePaths
+import com.noapmat.tstream.torrent.HttpRange
+import com.noapmat.tstream.torrent.OrientationPicker
+import com.noapmat.tstream.torrent.OrientationPicker.Choice.LANDSCAPE
+import com.noapmat.tstream.torrent.OrientationPicker.Choice.PORTRAIT
+import com.noapmat.tstream.torrent.StoragePaths
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

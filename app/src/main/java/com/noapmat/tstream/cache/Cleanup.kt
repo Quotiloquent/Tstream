@@ -1,4 +1,4 @@
-package com.noapmat.tsream.cache
+package com.noapmat.tstream.cache
 
 import java.io.File
 import java.io.RandomAccessFile

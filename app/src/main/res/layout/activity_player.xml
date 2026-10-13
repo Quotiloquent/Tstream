@@ -112,7 +112,9 @@
             android:id="@+id/seek"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1" />
+            android:layout_weight="1"
+            android:progressDrawable="@drawable/seek_track"
+            android:splitTrack="false" />
 
         <TextView
             android:id="@+id/tvDur"

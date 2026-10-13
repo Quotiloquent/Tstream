@@ -1,11 +1,11 @@
-package com.noapmat.tsream.cache
+package com.noapmat.tstream.cache
 
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
-import com.noapmat.tsream.App
+import com.noapmat.tstream.App
 
 /**
  * Swiping the app away from Recents usually kills the process without running any Activity.onDestroy, so the

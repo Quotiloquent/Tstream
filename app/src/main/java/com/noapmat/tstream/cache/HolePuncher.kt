@@ -1,4 +1,4 @@
-package com.noapmat.tsream.cache
+package com.noapmat.tstream.cache
 
 /** Thin wrapper over fallocate(PUNCH_HOLE): really gives disk space back while the file stays the same size. */
 object HolePuncher {

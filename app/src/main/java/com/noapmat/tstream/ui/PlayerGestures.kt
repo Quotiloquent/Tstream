@@ -1,4 +1,4 @@
-package com.noapmat.tsream.ui
+package com.noapmat.tstream.ui
 
 import android.annotation.SuppressLint
 import android.view.GestureDetector
@@ -29,7 +29,7 @@ class PlayerGestures(private val view: View, private val cb: Callbacks) : View.O
     enum class Zone { LEFT, CENTER, RIGHT }
 
     companion object {
-        const val HOLD_MS = 1200L
+        const val HOLD_MS = 500L
     }
 
     private val slop = ViewConfiguration.get(view.context).scaledTouchSlop
@@ -57,8 +57,8 @@ class PlayerGestures(private val view: View, private val cb: Callbacks) : View.O
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             val start = e1 ?: return false
             val vertical = abs(e2.y - start.y) > abs(e2.x - start.x)
-            if (vertical && start.x < view.width / 2f) {
-                cb.onVolumeScroll(distanceY / view.height) // distanceY > 0 when the finger moves up
+            if (vertical && start.x > view.width / 2f) {
+                cb.onVolumeScroll(distanceY / view.height)
                 return true
             }
             return false
