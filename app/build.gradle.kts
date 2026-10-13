@@ -14,6 +14,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+        // The UI is English only: drop the translations of libVLC / Material / AppCompat.
+        resourceConfigurations += listOf("en")
         // Only the helper library below is limited here. The APK ABIs come from `splits` (ndk.abiFilters would
         // conflict with it).
         externalNativeBuild { cmake { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
@@ -37,9 +39,6 @@ android {
     // assembleRelease would otherwise also run lintVital; this project has only ever been built as debug, so don't
     // let a pre-existing lint finding block the APKs.
     lint { checkReleaseBuilds = false }
-
-    // The UI is English only: drop the translations of libVLC / Material / AppCompat.
-    androidResources { localeFilters += listOf("en") }
 
     buildTypes {
         release {
