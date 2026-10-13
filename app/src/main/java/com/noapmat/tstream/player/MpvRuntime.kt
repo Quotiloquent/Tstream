@@ -2,6 +2,8 @@ package com.noapmat.tstream.player
 
 import android.content.Context
 import android.graphics.Bitmap
+import java.io.DataInputStream
+import java.io.File
 import android.view.Surface
 import dev.jdtech.mpv.MPVLib
 import java.util.concurrent.Callable
@@ -130,25 +132,78 @@ object MpvRuntime {
             e.message ?: e.javaClass.simpleName
         }
 
+    @Volatile private var grabScriptFor: MPVLib? = null // the core the grab script was loaded into
+
     /**
-     * Grabs the current frame as a Bitmap through the library's own raw-screenshot bridge (mpv's "screenshot-raw"),
-     * which needs no image encoder. [maxSide] is the longer edge of the result: pass the video's own size for 1:1.
-     * Returns the bitmap, or null plus the reason.
+     * Grabs the current frame as a Bitmap without needing an image encoder (this libmpv build has none): a tiny Lua
+     * script inside mpv runs its raw screenshot ("screenshot-raw") and writes the pixels to a file, which is read
+     * back here. [flags] is "video" (just the picture) or "subtitles" (picture with subtitles burned in).
+     * Blocking: call off the main thread. Returns the bitmap, or null plus the reason.
      */
-    fun grabFrame(maxSide: Int): Pair<Bitmap?, String> {
+    fun grabFrame(ctx: Context, flags: String): Pair<Bitmap?, String> {
         if (!alive) return null to "mpv not available"
-        return try {
-            val m = mpv ?: return null to "mpv not available"
-            val fn = m.javaClass.methods.firstOrNull { it.name == "grabThumbnail" && it.parameterTypes.size == 1 }
-                ?: return null to "this libmpv has no frame-grab method (it has: " +
-                    m.javaClass.methods.map { it.name }.distinct().sorted().joinToString() + ")"
-            val bmp = guarded { fn.invoke(it, maxSide) } as? Bitmap
-            if (bmp != null) bmp to "" else null to "frame grab returned nothing"
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            null to (e.targetException?.message ?: e.targetException?.javaClass?.simpleName ?: "frame grab failed")
+        val m = mpv ?: return null to "mpv not available"
+        val dir = ctx.cacheDir
+        val script = File(dir, "tstream_grab.lua")
+        val ready = File(dir, "tstream_ready.flag")
+        val base = File(dir, "grab-${System.nanoTime()}")
+        val raw = File(base.path + ".raw")
+        val meta = File(base.path + ".meta")
+        val errFile = File(base.path + ".err")
+        try {
+            if (grabScriptFor !== m) {
+                ready.delete()
+                script.writeText(GRAB_LUA.replace("__READY__", ready.absolutePath))
+                val err = commandError("load-script", script.absolutePath)
+                if (err != null) return null to "couldn't load the grab script: $err"
+                if (!waitFor(4000) { ready.exists() })
+                    return null to "the grab script never started (Lua scripting may be missing from this libmpv)"
+                grabScriptFor = m
+            }
+            val err = commandError("script-message", "tstream-grab", base.absolutePath, flags)
+            if (err != null) return null to "couldn't reach the grab script: $err"
+            if (!waitFor(10000) { meta.length() > 0 || errFile.length() > 0 })
+                return null to "the grab script didn't answer in time"
+            if (errFile.length() > 0) return null to "grab script: ${errFile.readText().trim()}"
+
+            val parts = meta.readText().trim().split(" ")
+            val w = parts.getOrNull(0)?.toIntOrNull()
+            val h = parts.getOrNull(1)?.toIntOrNull()
+            val stride = parts.getOrNull(2)?.toIntOrNull()
+            val fmt = parts.getOrNull(3) ?: ""
+            if (w == null || h == null || stride == null || w <= 0 || h <= 0 || stride < w * 4)
+                return null to "unexpected frame info: ${meta.readText().trim()}"
+            if (fmt != "bgr0" && fmt != "bgra") return null to "unsupported pixel format: $fmt"
+
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val row = ByteArray(stride)
+            val px = IntArray(w)
+            DataInputStream(raw.inputStream().buffered(1 shl 16)).use { input ->
+                for (y in 0 until h) {
+                    input.readFully(row, 0, if (y == h - 1) w * 4 else stride)
+                    for (x in 0 until w) {
+                        val o = x * 4
+                        px[x] = (0xFF shl 24) or ((row[o + 2].toInt() and 0xFF) shl 16) or
+                            ((row[o + 1].toInt() and 0xFF) shl 8) or (row[o].toInt() and 0xFF)
+                    }
+                    bmp.setPixels(px, 0, w, 0, y, w, 1)
+                }
+            }
+            return bmp to ""
         } catch (e: Throwable) {
-            null to (e.message ?: e.javaClass.simpleName)
+            return null to (e.message ?: e.javaClass.simpleName)
+        } finally {
+            raw.delete(); meta.delete(); errFile.delete()
         }
+    }
+
+    private inline fun waitFor(timeoutMs: Long, cond: () -> Boolean): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < end) {
+            if (cond()) return true
+            Thread.sleep(25)
+        }
+        return cond()
     }
 
     fun setString(name: String, value: String) { guarded { it.setPropertyString(name, value) } }
@@ -167,3 +222,28 @@ object MpvRuntime {
     private fun rawSetOption(m: MPVLib, name: String, value: String): Boolean =
         try { m.setOptionString(name, value) >= 0 } catch (e: Exception) { false }
 }
+
+// Runs inside mpv: answers "script-message tstream-grab <outBase> <flags>" with the raw frame in <outBase>.raw plus
+// <outBase>.meta ("w h stride format", written last), or <outBase>.err with the reason. __READY__ is replaced by the
+// path of a marker file created once the script is listening.
+private const val GRAB_LUA = """
+mp.register_script_message("tstream-grab", function(out, flags)
+    local ok, err = pcall(function()
+        local r, e = mp.command_native({"screenshot-raw", flags})
+        if not r then error(e or "screenshot-raw failed") end
+        if type(r.data) ~= "string" then error("unexpected data type " .. type(r.data)) end
+        local f = assert(io.open(out .. ".raw", "wb"))
+        f:write(r.data)
+        f:close()
+        local m = assert(io.open(out .. ".meta", "wb"))
+        m:write(string.format("%d %d %d %s", r.w, r.h, r.stride, r.format))
+        m:close()
+    end)
+    if not ok then
+        local m = io.open(out .. ".err", "wb")
+        if m then m:write(tostring(err)); m:close() end
+    end
+end)
+local rf = io.open("__READY__", "wb")
+if rf then rf:write("1"); rf:close() end
+"""

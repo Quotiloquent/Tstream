@@ -607,8 +607,8 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
      * Pictures/Tstream as a lossless PNG. It is always mpv's own render, never a grab of the screen.
      *
      * This libmpv build ships no image encoder, so mpv's `screenshot-to-file` cannot write files here ("Could not
-     * open libavcodec encoder"). It is still tried once (it works on builds that have an encoder and also burns in
-     * subtitles); otherwise the raw frame is taken from mpv and encoded to PNG here, without subtitles.
+     * open libavcodec encoder"). It is still tried once (it works on builds that have an encoder); otherwise a small
+     * Lua script inside mpv hands over the raw frame (with subtitles if enabled) and the PNG is encoded here.
      */
     private fun takeScreenshot() {
         if (!started || released) { toast("Nothing to capture yet"); return }
@@ -617,7 +617,6 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val stamp = SystemClock.elapsedRealtime()
         lifecycleScope.launch {
             val report = ArrayList<String>()
-            var note = ""
             val where = withContext(Dispatchers.IO) {
                 val f = File(cacheDir, "shot-$stamp.png")
                 try {
@@ -630,26 +629,14 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         if (!ok) { f.delete(); mpvWriterUnavailable = true; report += "mpv file writer: ${err ?: "failed"}" }
                     }
                     if (!ok) {
-                        val w = MpvRuntime.getString("video-params/w")?.toIntOrNull()
-                            ?: MpvRuntime.getString("width")?.toIntOrNull()
-                        val h = MpvRuntime.getString("video-params/h")?.toIntOrNull()
-                            ?: MpvRuntime.getString("height")?.toIntOrNull()
-                        if (w == null || h == null) {
-                            report += "raw capture: video size unknown (width=$w, height=$h)"
+                        val (bmp, why) = MpvRuntime.grabFrame(applicationContext, if (withSubs) "subtitles" else "video")
+                        if (bmp == null) {
+                            report += "raw capture: $why"
                         } else {
-                            val (bmp, why) = MpvRuntime.grabFrame(maxOf(w, h))
-                            if (bmp == null) {
-                                report += "raw capture: $why"
-                            } else {
-                                val bw = bmp.width
-                                val bh = bmp.height
-                                java.io.FileOutputStream(f).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-                                bmp.recycle()
-                                ok = f.length() > 0
-                                if (!ok) report += "raw capture: PNG encoding wrote nothing"
-                                if (bw != w && bh != h) note = " (scaled to ${bw}x$bh, video is ${w}x$h)"
-                                else if (withSubs) note = " (without subtitles)"
-                            }
+                            java.io.FileOutputStream(f).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                            bmp.recycle()
+                            ok = f.length() > 0
+                            if (!ok) report += "raw capture: PNG encoding wrote nothing"
                         }
                     }
                     if (ok) {
@@ -667,7 +654,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             if (released) return@launch
             if (where != null) {
-                toast("Saved to $where$note")
+                toast("Saved to $where")
             } else {
                 val text = report.joinToString("\n")
                 Log.w("Screenshot", "screenshot failed:\n$text")
