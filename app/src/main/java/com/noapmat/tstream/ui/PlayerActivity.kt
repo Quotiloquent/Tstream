@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowManager
@@ -604,7 +605,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     /**
      * Asks mpv to write the current frame as a PNG at the video's own resolution: just the picture (no letterbox
      * bars), with the visible subtitle drawn in only when "Subtitles in screenshots" is on in Settings. The file is
-     * then copied to Pictures/Tstream.
+     * then copied to Pictures/Tstream. It is always mpv's own full-quality render, never a grab of the screen.
      */
     private fun takeScreenshot() {
         if (!started || released) { toast("Nothing to capture yet"); return }
@@ -612,15 +613,52 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val mode = if ((application as App).settings.screenshotSubtitles) "subtitles" else "video"
         val tmp = File(cacheDir, "shot-${SystemClock.elapsedRealtime()}.png")
         lifecycleScope.launch {
+            var failure = ""
             val where = withContext(Dispatchers.IO) {
                 try {
-                    MpvRuntime.command("screenshot-to-file", tmp.absolutePath, mode)
-                    if (tmp.length() > 0) Screenshots.save(this@PlayerActivity, tmp, title.ifBlank { "video" }, pos) else null
+                    fun attempt(): String? {
+                        tmp.delete()
+                        val err = MpvRuntime.commandError("screenshot-to-file", tmp.absolutePath, mode)
+                        return err ?: if (tmp.length() > 0) null else "mpv wrote no file"
+                    }
+
+                    var err = attempt()
+                    // A zero-copy MediaCodec frame lives only on the GPU and can't always be read back. Decode in
+                    // copy mode just long enough to take the picture, then put the user's setting back.
+                    if (err != null && MpvRuntime.getString("hwdec-current") == "mediacodec") {
+                        val userHwdec = MpvRuntime.getString("hwdec") ?: "mediacodec,mediacodec-copy"
+                        MpvRuntime.setString("hwdec", "mediacodec-copy")
+                        try {
+                            for (i in 1..16) {
+                                delay(150)
+                                if (MpvRuntime.getString("hwdec-current") != "mediacodec-copy") continue
+                                err = attempt()
+                                if (err == null) break
+                            }
+                        } finally {
+                            MpvRuntime.setString("hwdec", userHwdec)
+                        }
+                    }
+                    if (err == null) {
+                        Screenshots.save(this@PlayerActivity, tmp, title.ifBlank { "video" }, pos)
+                            ?: run { failure = "couldn't write to the gallery"; null }
+                    } else {
+                        failure = "$err (hwdec=${MpvRuntime.getString("hwdec-current")}, " +
+                            "vo=${MpvRuntime.getString("current-vo")}, mode=$mode)"
+                        Log.w("Screenshot", "screenshot-to-file failed: $failure")
+                        null
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failure = e.message ?: e.javaClass.simpleName
+                    null
                 } finally {
                     tmp.delete()
                 }
             }
-            toast(if (where != null) "Saved to $where" else "Couldn't capture this frame")
+            if (released) return@launch
+            toast(if (where != null) "Saved to $where" else "Couldn't capture this frame: $failure")
         }
     }
 

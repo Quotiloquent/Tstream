@@ -118,6 +118,17 @@ object MpvRuntime {
         guarded { it.command(arrayOf(*args)) }
     }
 
+    /**
+     * Like [command], but reports the outcome: null when mpv ran it, otherwise why not (the core is gone or
+     * closing, or mpv threw). A failing command such as a screenshot must not crash the caller.
+     */
+    fun commandError(vararg args: String): String? =
+        try {
+            if (guarded { it.command(arrayOf(*args)); true } == true) null else "mpv not available"
+        } catch (e: Throwable) {
+            e.message ?: e.javaClass.simpleName
+        }
+
     fun setString(name: String, value: String) { guarded { it.setPropertyString(name, value) } }
     fun setBool(name: String, value: Boolean) { guarded { it.setPropertyBoolean(name, value) } }
     fun setDouble(name: String, value: Double) { guarded { it.setPropertyDouble(name, value) } }

@@ -29,14 +29,22 @@ object Screenshots {
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
                 val uri: Uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return null
-                ctx.contentResolver.openOutputStream(uri)?.use { out -> png.inputStream().use { it.copyTo(out) } }
-                cv.clear()
-                cv.put(MediaStore.Images.Media.IS_PENDING, 0)
-                ctx.contentResolver.update(uri, cv, null, null)
+                try {
+                    val out = ctx.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("no output stream")
+                    out.use { o -> png.inputStream().use { it.copyTo(o) } }
+                    cv.clear()
+                    cv.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    ctx.contentResolver.update(uri, cv, null, null)
+                } catch (e: Exception) {
+                    // don't leave an invisible half-written "pending" entry behind
+                    try { ctx.contentResolver.delete(uri, null, null) } catch (x: Exception) { /* nothing more to do */ }
+                    return null
+                }
                 "Pictures/Tstream/$name"
             } else {
                 // Android 8/9: no storage permission needed for the app's own external pictures folder
-                val dir = File(ctx.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Tstream").apply { mkdirs() }
+                val base = ctx.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: ctx.filesDir
+                val dir = File(base, "Tstream").apply { mkdirs() }
                 val target = File(dir, name)
                 png.copyTo(target, overwrite = true)
                 target.absolutePath
