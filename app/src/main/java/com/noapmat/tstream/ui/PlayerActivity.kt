@@ -124,15 +124,13 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
             fastForwarding = true
             speedBeforeHold = curSpeed
             MpvRuntime.setDouble("speed", 2.0)
-            // MpvRuntime.setBool("mute", true) // sped-up audio is just noise, and muting skips the time-stretching work
-            showHud("2x 》", persistent = true)
+            showHud("2x ＞＞", persistent = true)
         }
 
         override fun onHoldEnd() {
             if (!fastForwarding) return
             fastForwarding = false
             MpvRuntime.setDouble("speed", speedBeforeHold)
-            // MpvRuntime.setBool("mute", false)
             ui.removeCallbacks(hideHud)
             b.hud.visibility = View.GONE
         }
@@ -251,10 +249,9 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             stream.waitInfo?.let { appendLine(it) }
                             if (tst.peers == 0) appendLine("No peers available yet.")
                         }
-                        if (aheadMs > 0) appendLine("Buffered ${clock(aheadMs)} ahead")
                         append("\u2193 ${Fmt.rate(tst.downBps)}  ")
                         if (seeding) append("\u2191 ${Fmt.rate(tst.upBps)}  ") // upload only shown while seeding is on
-                        append("[P:${tst.peers} | S:${tst.seeds}]")
+                        append("[P:${tst.peers},SD:${tst.seeds}]")
                     }
                 }
                 if (++tick % 40 == 0) savePosition()

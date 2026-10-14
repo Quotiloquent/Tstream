@@ -644,10 +644,10 @@ internal class LtFileStream(
         }
         waitText = (if (pi != null) {
             "#$piece: ${pi.finished()}/${pi.blocksInPiece()}" +
-                (if (pi.requested() > 0) " <> ${pi.requested()}" else "") + " (%.1f MB/p)".format(mb)
+                (if (pi.requested() > 0) " • ${pi.requested()}" else "") + " (%.1f MB/p)".format(mb)
         } else {
             "#$piece queued (%.1f MB/p)".format(mb)
-        }) + (st?.let { "\n${it.state().name.lowercase()} • P:${it.numPeers()}, ${it.listPeers()} total, ${it.connectCandidates()} to try" } ?: "")
+        }) + (st?.let { "\n${it.state().name.lowercase()} • [PA:${it.numPeers()}/${it.listPeers()}|PC:${it.connectCandidates()}]" } ?: "")
     }
 
     /**

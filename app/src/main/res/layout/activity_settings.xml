@@ -123,7 +123,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="On: downloads only a limited amount ahead of the playhead and deletes data once you are far enough past it. Off: the whole file is cached straight into the folder."
+                        android:text="Downloads only a limited amount ahead of the playhead and deletes data once you are far enough past it."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -208,7 +208,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
-                        android:text="Unavailable while smart cache is on: smart cache deletes data you have already watched, so there is nothing complete to share."
+                        android:text="Unavailable while smart cache is on."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorTertiary"
                         android:visibility="gone" />
@@ -269,7 +269,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Applies to plain subtitles (SRT, VTT). Styled ASS/SSA subtitles keep the sizes, fonts and colors the release set."
+                        android:text="Applies to plain subtitles (SRT, VTT). Doesn't override styled ASS/SSA subtitles."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -298,7 +298,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Use the phone's video chip when it supports the format. Turn it off if you see garbled or smeared pictures: everything is then decoded by the CPU, which is slower but exact."
+                        android:text="Use the phone's video chip when it supports the format. Turn it off if you see garbled or smeared pictures."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -402,7 +402,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Screenshots are saved at the video's own resolution. Turn this on to draw the subtitle that is on screen onto the picture; off gives the clean frame."
+                        android:text="Includes subtitles in the screenshot."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
@@ -445,7 +445,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Extra flags for the mpv player, written like an mpv.conf: one option per line, name=value (a leading -- is fine, no value means yes, # starts a comment). They are applied after the settings above, so they win. They take effect the next time a video starts. Lines mpv doesn't understand are skipped and listed in the player's info box. If playback breaks, press Default and turn this off."
+                        android:text="Extra flags for the mpv player."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -560,7 +560,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:text="Resume where you left off. Saved per exact title (the video's file path inside the torrent), so a different release of the same movie starts from the beginning."
+                        android:text="Resume where you left off. Saved per exact title, different release of the same video starts from the beginning."
                         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
