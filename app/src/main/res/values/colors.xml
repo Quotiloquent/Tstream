@@ -1,0 +1,9 @@
+<resources>
+    <color name="ic_launcher_background">#F4F6FB</color>
+    <!-- Brand palette taken from the logo gradient. On Android 12+ Material You colours replace it. -->
+    <color name="brand_primary">#4A55C9</color>
+    <color name="brand_on_primary">#FFFFFF</color>
+    <color name="brand_primary_container">#DDE0FF</color>
+    <color name="brand_on_primary_container">#0A1470</color>
+    <color name="overlay_bg">#99000000</color>
+</resources>

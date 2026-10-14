@@ -1,0 +1,125 @@
+package com.noapmat.tstream
+
+import android.content.Context
+import com.noapmat.tstream.player.MpvFlags
+import java.io.File
+
+/** User settings (persisted in SharedPreferences) plus a few fixed defaults. 0 for limits means "unlimited". */
+data class AppSettings(
+    val smartCache: Boolean = true,
+    val aheadMb: Int = DEFAULT_AHEAD_MB,     // max data downloaded beyond the player's read position
+    val behindMb: Int = DEFAULT_BEHIND_MB,   // data further than this behind the playhead is deleted
+    val seedWhileWatching: Boolean = false,
+    val rememberPosition: Boolean = true,    // resume where you left off, per exact title
+    val subtitleSize: Int = 1,               // 0 small, 1 medium, 2 large (text subtitles; ASS keeps its own sizes)
+    val fastDecode: Boolean = false,         // skip some in-loop filtering in software decoding: smoother, slightly blockier
+    val hardwareDecoding: Boolean = true,    // try the phone's chip first; off = always decode on the CPU
+    val audioOutput: Int = 0,                // 0 automatic, 1 AudioTrack, 2 OpenSL ES
+    val screenshotSubtitles: Boolean = false, // draw the visible subtitles onto screenshots
+    val mpvFlagsEnabled: Boolean = true,     // apply the custom mpv options below (the text is kept when switched off)
+    val mpvFlags: String = "",               // mpv.conf style, one option per line; applied after the app's own options
+    val cacheDir: String = "",               // folder picked by the user, "" = app-private default
+    val maxConnections: Int = 100,
+    val downloadLimitBps: Int = 0,
+    val uploadLimitBps: Int = 0,
+    val minBufferMs: Int = 15_000,
+    val maxBufferMs: Int = 60_000,
+    val startBufferMs: Int = 1_000,
+    val rebufferMs: Int = 2_500,
+    val metadataTimeoutMs: Long = 90_000,
+) {
+    val aheadBytes: Long get() = aheadMb.toLong() shl 20
+    val behindBytes: Long get() = behindMb.toLong() shl 20
+
+    /**
+     * Seeding and smart cache are mutually exclusive: smart cache deletes data behind the playhead, and
+     * libtorrent would keep advertising (and serving) pieces whose bytes are gone. So seeding only
+     * counts when smart cache is off, whatever the stored switch says.
+     */
+    val seeding: Boolean get() = seedWhileWatching && !smartCache
+
+    /** mpv "sub-font-size" (its default is 55): the bigger the number, the bigger the text. Plain subtitles only. */
+    val subtitleFontSize: Int get() = when (subtitleSize) { 0 -> 42; 2 -> 72; else -> 55 }
+
+    /** RAM cap for mpv's demuxer buffer (it would otherwise grow to 150 MB forward and 150 MB back). */
+    val playerRamBytes: Int get() = (aheadMb * 3).coerceIn(48, 192) shl 20
+
+    companion object {
+        const val DEFAULT_AHEAD_MB = 25
+        const val DEFAULT_BEHIND_MB = 15
+        const val MIN_AHEAD_MB = 10
+        const val MIN_BEHIND_MB = 4
+        const val MAX_MB = 4096
+        const val CACHE_FOLDER = "Tstream-cache"
+        private const val PREFS = "settings"
+
+        fun load(ctx: Context): AppSettings {
+            val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (p.getInt("version", 1) < 2) {
+                // v2 changed the defaults (25 / 15 MB): forget values saved by older builds so the new defaults apply
+                p.edit().remove("aheadMb").remove("behindMb").putInt("version", 2).apply()
+            }
+            return AppSettings(
+                smartCache = p.getBoolean("smartCache", true),
+                aheadMb = p.getInt("aheadMb", DEFAULT_AHEAD_MB).coerceIn(MIN_AHEAD_MB, MAX_MB),
+                behindMb = p.getInt("behindMb", DEFAULT_BEHIND_MB).coerceIn(MIN_BEHIND_MB, MAX_MB),
+                seedWhileWatching = p.getBoolean("seed", false),
+                rememberPosition = p.getBoolean("rememberPosition", true),
+                subtitleSize = p.getInt("subtitleSize", 1).coerceIn(0, 2),
+                fastDecode = p.getBoolean("fastDecode", false),
+                hardwareDecoding = p.getBoolean("hardwareDecoding", true),
+                audioOutput = p.getInt("audioOutput", 0).coerceIn(0, 2),
+                screenshotSubtitles = p.getBoolean("screenshotSubtitles", false),
+                mpvFlagsEnabled = p.getBoolean("mpvFlagsEnabled", true),
+                mpvFlags = (p.getString("mpvFlags", "") ?: "").take(MpvFlags.MAX_CHARS),
+                cacheDir = p.getString("cacheDir", "") ?: "",
+            )
+        }
+
+        fun update(ctx: Context, change: (AppSettings) -> AppSettings) {
+            val s = change(load(ctx))
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("smartCache", s.smartCache)
+                .putInt("aheadMb", s.aheadMb.coerceIn(MIN_AHEAD_MB, MAX_MB))
+                .putInt("behindMb", s.behindMb.coerceIn(MIN_BEHIND_MB, MAX_MB))
+                .putBoolean("seed", s.seedWhileWatching)
+                .putBoolean("rememberPosition", s.rememberPosition)
+                .putInt("subtitleSize", s.subtitleSize)
+                .putBoolean("fastDecode", s.fastDecode)
+                .putBoolean("hardwareDecoding", s.hardwareDecoding)
+                .putInt("audioOutput", s.audioOutput)
+                .putBoolean("screenshotSubtitles", s.screenshotSubtitles)
+                .putBoolean("mpvFlagsEnabled", s.mpvFlagsEnabled)
+                .putString("mpvFlags", s.mpvFlags.take(MpvFlags.MAX_CHARS))
+                .putInt("version", 2)
+                .putString("cacheDir", s.cacheDir)
+                .apply()
+        }
+
+        /** Every cache folder we ever used, so leftovers can be wiped after a crash / swipe-away. */
+        fun rememberRoot(ctx: Context, root: File) {
+            val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val set = HashSet(p.getStringSet("knownRoots", emptySet()) ?: emptySet())
+            if (set.add(root.absolutePath)) p.edit().putStringSet("knownRoots", set).apply()
+        }
+
+        fun knownRoots(ctx: Context): Set<String> =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet("knownRoots", emptySet()) ?: emptySet()
+
+        /** The default, app-private cache folder (needs no permissions). */
+        fun defaultRoot(ctx: Context) = File(ctx.cacheDir, "torrents")
+
+        /**
+         * Where torrents are downloaded. Always a dedicated sub-folder, because everything inside it is
+         * deleted when the torrent is closed. Falls back to the default if the picked folder is gone/read-only.
+         */
+        fun cacheRoot(ctx: Context): File {
+            val custom = load(ctx).cacheDir
+            if (custom.isNotBlank()) {
+                val parent = File(custom)
+                if (parent.isDirectory && parent.canWrite()) return File(parent, CACHE_FOLDER)
+            }
+            return defaultRoot(ctx)
+        }
+    }
+}
