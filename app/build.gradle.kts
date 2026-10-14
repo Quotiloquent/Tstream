@@ -17,7 +17,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1"
+        versionName = "1.0.0"
         // The UI is English only: drop the translations of Material / AppCompat.
         resourceConfigurations += listOf("en")
         // Only the helper library below is limited here. The APK ABIs come from `splits` (ndk.abiFilters would
