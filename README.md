@@ -1,47 +1,162 @@
-# Tstream
+<div align="center">
 
-Paste a magnet link (or open a .torrent), pick a video, it plays while it downloads.
+<img src="assets/logo.png" alt="Tstream logo" width="140" />
 
-`libmpv -> http://127.0.0.1 (StreamServer, Range) -> LtFileStream (piece window, deadlines, eviction) -> libtorrent4j -> peers/DHT/trackers`
+<h1 align="center">Tstream</h1>
 
-## Features
-- Smart cache (on by default): downloads at most *ahead* MB beyond the read position (default 25), deletes data more than
-  *behind* MB (default 15) behind the playhead using `fallocate(PUNCH_HOLE)`, never deletes the first/last two pieces
-  (container headers/index). Seeking back past deleted data triggers a recheck and re-download.
-- Smart cache off: the whole file is cached straight into the cache folder.
-- Cache folder picker (system folder picker, Android 10+). Only the `Tstream-cache` sub-folder is ever written/deleted.
-- Seed while watching (off by default, only available with smart cache off). Shows upload speed in the player. Seeding stops and the cache is deleted when you leave the player.
-- Player engine: libmpv (mpv 0.41 + FFmpeg, via `dev.jdtech.mpv:libmpv`). Hardware decoding through MediaCodec with an automatic
-  software fallback for formats the phone's chip can't decode (e.g. 10-bit HEVC), GPU video output, libass renders ASS/SSA with the
-  release's own fonts, colors and positioning. Plain subtitles use a size you choose in Settings. Hardware decoding, fast software
-  decoding and the audio output are switchable in Settings.
-- Advanced mpv options (Settings): a text box that takes mpv.conf-style flags, one per line (`profile=gpu-hq`, `--deband=yes`,
-  `interpolation`, `no-deband`, `# comment`). They are applied after the app's own options, so they override them, and take effect the
-  next time a video starts. Presets: Quality, Performance, Default. A switch turns the custom flags off without deleting them; lines that
-  can't be parsed are flagged under the box, options mpv itself refuses are listed in the player's info box, and if mpv won't start with
-  the custom flags it is started again without them.
-- Player: double-tap left/right = -/+10 s (middle = play/pause), vertical swipe on the left half = volume,
-  hold 1.2 s = 2x speed while held, lock button, screenshot button (Pictures/Tstream, written by mpv at the video's own resolution, picture only without black bars; the visible subtitle is drawn onto it only if "Subtitles in screenshots" is on in Settings), subtitle picker
-  (SRT / ASS / SSA / VTT files from the torrent, plus tracks embedded in the video), audio track picker, speed picker, resume position per exact title.
-- Resuming skips the beginning of the file: the byte position is saved with the time, so the download window starts
-  there (only the container header/index pieces are fetched from the start).
-- Nothing downloads in the background: torrents start in upload mode (metadata only), the browse-time prefetch is
-  capped (speed and total size), cancelled loads are removed, and all network activity pauses when no screen is visible.
-- Leaving the player stops the torrent and deletes its cache. The file list stays on the main screen, but the torrent is
-  not re-opened in the background: it is fetched again only when you pick a video.
-- Swiping the app away from Recents stops the torrent and wipes the cache right away (`ExitCleanupService`).
-- Cache left behind by a crash / force-stop is wiped on the next launch.
-- Player orientation follows the video: landscape or portrait, whichever shows the picture larger.
-- Google Sans (OFL) bundled; Material You colours on Android 12+.
+**Paste a magnet link. Pick a video. Watch it while it downloads.**
 
-## Build
-GitHub Actions (`.github/workflows/android.yml`) installs NDK 26.1 + CMake 3.22.1, runs unit tests and builds the release APKs.
-Local: `gradle assembleRelease` (Gradle 8.9, JDK 17). Output in `app/build/outputs/apk/release/`:
-- `app-arm64-v8a-release.apk`: 64-bit ARM, almost every phone made since ~2017. Pick this one if unsure.
-- `app-armeabi-v7a-release.apk`: 32-bit ARM, older phones.
-- `app-universal-release.apk`: both ABIs in one file (larger).
+A lightweight Android torrent streamer with a full-featured video player and a tiny storage footprint.
 
-The release build uses R8 + resource shrinking and is signed with the debug key so it installs directly.
-x86 / x86_64 are not built (they need the matching `libtorrent4j-android-x86*` dependencies plus an `include(...)` entry in `splits`).
+<sub>Android 8.0+ &nbsp;·&nbsp; Kotlin &nbsp;·&nbsp; libmpv &nbsp;·&nbsp; libtorrent4j</sub>
 
-Fonts: Google Sans, SIL Open Font License (see `app/src/main/assets/OFL-GoogleSans.txt`).
+<br />
+
+<img src="assets/preview.svg" alt="Tstream app preview: home screen and video player" width="860" />
+
+</div>
+
+---
+
+## Highlights
+
+| Feature | What it does |
+|---|---|
+| **Instant streaming** | Open a magnet link or a `.torrent` file, tap a video and it starts playing while the rest is still downloading. |
+| **Smart cache** | Downloads only a small window around your position (25 MB ahead by default) and frees the part you have already watched (15 MB behind). A long movie never fills your storage. Turn it off to keep the whole file instead. |
+| **Seed while watching** | Optionally give back to the swarm while you watch, with live upload speed in the player. |
+| **Powerful player** | Powered by libmpv (mpv + FFmpeg): hardware decoding with automatic software fallback (10-bit HEVC and friends), and proper ASS/SSA subtitle styling. |
+| **Tunable** | Advanced users can pass their own mpv options (with *Quality* and *Performance* presets) right from Settings. |
+
+---
+
+## Requirements
+
+### To run the app
+
+- Android **8.0 (API 26)** or newer
+- An **ARM** device: `arm64-v8a` (nearly every phone since ~2017) or `armeabi-v7a` (older 32-bit phones)
+- An internet connection
+- Android 10+ to use the system folder picker for the cache location. Choosing a folder outside the app's own storage may ask for **All files access**.
+
+### To build it
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **JDK** | 17 | Temurin / OpenJDK both work |
+| **Gradle** | 8.13 or newer | No Gradle wrapper is bundled, so install Gradle yourself (or generate a wrapper, see step 5) |
+| **Android SDK** | Platform **36** | Command-line tools or Android Studio |
+| **Android NDK** | **26.1.10909125** | Builds the small native helper library |
+| **CMake** | **3.22.1** | Installed through the SDK Manager |
+
+Fetched automatically by Gradle: Android Gradle Plugin `8.13.2` and Kotlin `2.2.10`.
+
+### Libraries used
+
+| Library | Version | Purpose |
+|---|---|---|
+| [libtorrent4j](https://github.com/aldenml/libtorrent4j) | 2.1.0-35 | BitTorrent engine (arm64 and arm builds) |
+| libmpv (`dev.jdtech.mpv`) | 1.0.0 | Video player (mpv 0.41 + FFmpeg 8.1) |
+| AndroidX AppCompat | 1.7.0 | UI foundation |
+| Material Components | 1.12.0 | Material 3 widgets and theming |
+| AndroidX Lifecycle | 2.8.6 | Lifecycle-aware components |
+| Kotlin Coroutines | 1.8.1 | Background work |
+| JUnit | 4.13.2 | Unit tests |
+
+---
+
+## Building from source
+
+The steps below use the command line on Linux or macOS. On Windows, use the same commands in PowerShell with `gradle.bat` / `sdkmanager.bat`, or just use Android Studio (see the shortcut at the end).
+
+### 1. Get the code
+
+```bash
+git clone https://github.com/Quotiloquent/Tstream
+cd Tstream
+```
+
+Or unzip the source archive and `cd` into the folder that contains `settings.gradle.kts`.
+
+### 2. Install JDK 17
+
+Install JDK 17 from your package manager or [adoptium.net](https://adoptium.net), then check it:
+
+```bash
+java -version      # should report 17.x
+```
+
+### 3. Install the Android SDK, NDK and CMake
+
+If you already have Android Studio, open **Settings → Languages & Frameworks → Android SDK** and install *Android 16 (API 36)*, then under **SDK Tools** tick **NDK (Side by side) 26.1.10909125** and **CMake 3.22.1**.
+
+Prefer the command line? Download the [command-line tools](https://developer.android.com/studio#command-line-tools-only), then:
+
+```bash
+export ANDROID_HOME="$HOME/android-sdk"
+
+sdkmanager --sdk_root="$ANDROID_HOME" --licenses
+sdkmanager --sdk_root="$ANDROID_HOME" \
+  "platform-tools" \
+  "platforms;android-36" \
+  "ndk;26.1.10909125" \
+  "cmake;3.22.1"
+```
+
+### 4. Tell Gradle where the SDK is
+
+Either keep `ANDROID_HOME` exported, or create a `local.properties` file in the project root:
+
+```properties
+sdk.dir=/path/to/android-sdk
+```
+
+### 5. Install Gradle 8.13+
+
+Install it from [gradle.org](https://gradle.org/install/) or with SDKMAN (`sdk install gradle 8.13`), then confirm:
+
+```bash
+gradle --version   # Gradle 8.13 or newer
+```
+
+Optional: generate a wrapper so you can use `./gradlew` from now on:
+
+```bash
+gradle wrapper --gradle-version 8.13
+```
+
+### 6. (Optional) Run the unit tests
+
+```bash
+gradle testDebugUnitTest
+```
+
+### 7. Build the release APKs
+
+```bash
+gradle assembleRelease
+```
+
+The first build downloads dependencies and compiles the native helper, so expect a few minutes. When it finishes, the APKs are in `app/build/outputs/apk/release/`:
+
+| File | Use it for |
+|---|---|
+| `app-arm64-v8a-release.apk` | 64-bit ARM, almost every modern phone. **Pick this if unsure.** |
+| `app-armeabi-v7a-release.apk` | 32-bit ARM, older phones |
+| `app-universal-release.apk` | Both architectures in one (larger) file |
+
+> Need a quick development build instead? Run `gradle assembleDebug`. The output lands in `app/build/outputs/apk/debug/`.
+
+### 8. Install on your phone
+
+Enable **USB debugging** on the phone, connect it, and run:
+
+```bash
+adb install -r app/build/outputs/apk/release/app-arm64-v8a-release.apk
+```
+
+Or copy the APK to the phone and open it (you may need to allow *Install unknown apps*).
+
+### Android Studio shortcut
+
+Open the project folder in a recent Android Studio (one that supports Android Gradle Plugin 8.13), let it sync, then choose **Build → Generate App Bundles or APKs → Generate APKs**, or press **Run ▶** with a device connected.
