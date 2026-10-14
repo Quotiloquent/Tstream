@@ -231,10 +231,9 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     b.tvPos.text = clock(t)
                     b.tvDur.text = clock(len)
                     if (stream.size > 0) {
-                        // bytes -> time with the file's average bitrate (approximate for VBR video)
-                        val fromBytes = (t.coerceIn(0L, len).toDouble() / len * stream.size).toLong()
-                        val endMs = (stream.bufferedUntil(fromBytes).toDouble() / stream.size * len).toLong()
-                        b.seek.secondaryProgress = endMs.coerceIn(t.coerceAtLeast(0L), len).toInt()
+                        // off the UI thread: the stream's lock can be busy while the scheduler re-plans after a seek
+                        val endMs = withContext(Dispatchers.IO) { bufferEndMs(stream, t, len, st) }
+                        b.seek.secondaryProgress = endMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                         aheadMs = (endMs - t).coerceAtLeast(0L)
                     }
                 }
@@ -357,6 +356,8 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private class MpvState(
         val timeMs: Long?, val durMs: Long?, val paused: Boolean?, val stalled: Boolean?, val cachePct: Int?,
         val eof: Boolean?, val idle: Boolean?, val width: Int?, val height: Int?, val speed: Double?,
+        val cacheEndMs: Long?,  // media time up to which mpv itself has data buffered (its own RAM cache)
+        val streamPos: Long?,   // byte offset in the file of the packet mpv last handed to the decoder (the playhead)
     )
 
     /** One snapshot of everything the UI needs; a property mpv can't give yet is simply null. Blocking: IO thread. */
@@ -371,6 +372,8 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         width = MpvRuntime.getInt("dwidth"),   // video size after aspect ratio and rotation: what is really shown
         height = MpvRuntime.getInt("dheight"),
         speed = MpvRuntime.getDouble("speed"),
+        cacheEndMs = MpvRuntime.getDouble("demuxer-cache-time")?.let { (it * 1000).toLong() },
+        streamPos = MpvRuntime.getString("stream-pos")?.toLongOrNull(), // int64: getInt would overflow past 2 GB
     )
 
     private fun applyState(st: MpvState) {
@@ -378,6 +381,7 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
         st.timeMs?.let { lastTimeMs = it.coerceAtLeast(0L) }
         st.durMs?.let { lastDurMs = it.coerceAtLeast(0L) }
         st.speed?.let { curSpeed = it }
+        restoreWaitIfDone(st.stalled)
         if (st.timeMs != null && !started) { started = true; scheduleAutoHide() }
 
         bufferPct = when {
@@ -539,14 +543,73 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun secs(ms: Long) = String.format(Locale.US, "%.3f", ms / 1000.0)
 
+    /**
+     * Media time up to which the video is available: downloaded data past the playhead, counted from the playhead's
+     * real byte position (what mpv reports) rather than a guess from the average bitrate, which can land on a piece
+     * that is not on disk and made the whole indicator vanish. mpv's own cache is a floor: it holds real data even
+     * when the torrent side briefly can't see it (a recheck, pieces freed behind the playhead).
+     */
+    private fun bufferEndMs(stream: FileStream, t: Long, len: Long, st: MpvState): Long {
+        val size = stream.size
+        val pos = t.coerceIn(0L, len)
+        val linear = (pos.toDouble() / len * size).toLong()
+        val from = st.streamPos?.takeIf { it in 1 until size } ?: linear
+        val torrentEnd = pos + ((stream.bufferedUntil(from) - from).toDouble() / size * len).toLong()
+        return maxOf(torrentEnd, st.cacheEndMs ?: 0L).coerceIn(pos, len)
+    }
+
+    // After a seek mpv waits until `cache-pause-wait` seconds are buffered before it plays (the Rebuffer setting).
+    // Right at the end of what is already downloaded that means waiting for the torrent to deliver more, even though
+    // the picture at the target could start at once. So for a seek into downloaded data that is shorter than the
+    // wait, the wait is shortened to what is on disk, then put back once playback is running.
+    @Volatile private var waitOverridden = false
+    @Volatile private var waitOverriddenAt = 0L
+    @Volatile private var sawSeekStall = false
+
+    private fun prepareSeek(targetMs: Long) {
+        val stream = fileStream ?: return
+        val len = lastDurMs
+        if (stream.size <= 0 || len <= 0) return
+        val userWaitMs = (application as App).settings.rebufferMs.toLong()
+        val from = (targetMs.coerceIn(0L, len).toDouble() / len * stream.size).toLong()
+        val loadedMs = ((stream.bufferedUntil(from) - from).toDouble() / stream.size * len).toLong()
+        if (loadedMs in MIN_QUICK_START_MS until userWaitMs) {
+            MpvRuntime.setString("cache-pause-wait", String.format(Locale.US, "%.2f", loadedMs * 0.7 / 1000.0))
+            waitOverridden = true
+            waitOverriddenAt = SystemClock.elapsedRealtime()
+            sawSeekStall = false
+        }
+    }
+
+    /** Puts the Rebuffer wait back once the seek has resumed (or clearly never needed to wait). */
+    private fun restoreWaitIfDone(stalled: Boolean?) {
+        if (!waitOverridden) return
+        if (stalled == true) sawSeekStall = true
+        val age = SystemClock.elapsedRealtime() - waitOverriddenAt
+        if (stalled == false && (sawSeekStall || age > 3000)) {
+            waitOverridden = false
+            val ms = (application as App).settings.rebufferMs
+            MpvRuntime.setString("cache-pause-wait", String.format(Locale.US, "%.1f", ms / 1000.0))
+        }
+    }
+
     private fun seekTo(ms: Long) {
         if (!started || released) return
-        MpvRuntime.command("seek", secs(ms.coerceAtLeast(0L)), "absolute")
+        val target = ms.coerceAtLeast(0L)
+        // off the UI thread: looking at the download state takes the stream's lock
+        lifecycleScope.launch(Dispatchers.IO) {
+            prepareSeek(target)
+            MpvRuntime.command("seek", secs(target), "absolute")
+        }
     }
 
     private fun seekBy(deltaMs: Long) {
         if (!started || released) return
-        MpvRuntime.command("seek", secs(deltaMs), "relative")
+        val target = lastTimeMs + deltaMs
+        lifecycleScope.launch(Dispatchers.IO) {
+            prepareSeek(target)
+            MpvRuntime.command("seek", secs(deltaMs), "relative")
+        }
     }
 
     private fun adjustVolume(fraction: Float) {
@@ -790,3 +853,6 @@ class PlayerActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
 // Set once mpv's own file writer has failed (this libmpv build has no image encoder), so later shots skip straight to the raw capture.
 @Volatile private var mpvWriterUnavailable = false
+
+// A seek target needs at least this much downloaded data after it for the shortened rebuffer wait to be worth it.
+private const val MIN_QUICK_START_MS = 300L
