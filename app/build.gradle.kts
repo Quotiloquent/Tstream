@@ -12,14 +12,17 @@ android {
     compileSdk = 36
     ndkVersion = "26.1.10909125"
 
+    androidResources {
+        // The UI is English only: drop the translations of Material / AppCompat.
+        localeFilters += listOf("en")
+    }
+
     defaultConfig {
         applicationId = "com.noapmat.tstream"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.0"
-        // The UI is English only: drop the translations of Material / AppCompat.
-        resourceConfigurations += listOf("en")
+        versionName = "1.0.1"
         // Only the helper library below is limited here. The APK ABIs come from `splits` (ndk.abiFilters would
         // conflict with it).
         externalNativeBuild { cmake { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } }
@@ -38,7 +41,12 @@ android {
 
     // libmpv ships x86 / x86_64 builds too; the universal APK would otherwise contain them although only the two
     // ARM ABIs are supported (libtorrent4j is only added for those).
-    packaging { jniLibs { excludes += setOf("**/x86/**", "**/x86_64/**") } }
+    packaging {
+        jniLibs {
+            excludes += setOf("**/x86/**", "**/x86_64/**")
+            useLegacyPackaging = true
+        }
+    }
 
     // assembleRelease would otherwise also run lintVital; this project has only ever been built as debug, so don't
     // let a pre-existing lint finding block the APKs.
